@@ -10,6 +10,17 @@
 
 ---
 
+## Статус реализации
+- [x] Создан Rust workspace (yadisk-core, yadiskd).
+- [x] REST API client: `get_disk_info`/`get_resource` + unit‑tests.
+- [x] REST API client: download/upload link методы.
+- [x] REST API client: list_directory с `_embedded.items`.
+- [x] Token storage: secret portal (Flatpak) + keyring fallback (classic).
+- [x] OAuth helper: authorize URL + code обмен на токен.
+- [x] OAuth flow + хранение токенов в Keyring/portal.
+
+---
+
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.com/dev/disk/rest/
 - Yandex Disk API overview: https://yandex.com/dev/disk/
