@@ -1,7 +1,7 @@
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use yadisk_core::{ResourceType, YadiskClient};
+use yadisk_core::{OperationStatus, ResourceType, YadiskClient};
 
 #[tokio::test]
 async fn get_disk_info_includes_oauth_header() {
@@ -276,4 +276,26 @@ async fn delete_resource_returns_operation_link() {
         link.href.as_str(),
         "https://cloud-api.yandex.net/v1/disk/operations/3"
     );
+}
+
+#[tokio::test]
+async fn get_operation_status_parses_response() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/operations/123"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "success"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let status = client
+        .get_operation_status(&format!("{}/v1/disk/operations/123", server.uri()))
+        .await
+        .unwrap();
+
+    assert_eq!(status, OperationStatus::Success);
 }

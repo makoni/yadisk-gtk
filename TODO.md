@@ -19,11 +19,16 @@
 - [x] REST API client: move_resource (operation link).
 - [x] REST API client: copy_resource (operation link).
 - [x] REST API client: delete_resource (204/operation link).
+- [x] REST API client: operation status (GET /operations/{id}).
 - [x] Token storage: secret portal (Flatpak) + keyring fallback (classic).
 - [x] OAuth helper: authorize URL + code обмен на токен.
 - [x] OAuth flow + хранение токенов в Keyring/portal.
 - [x] Sync engine: базовая очередь операций (TDD).
 - [x] Sync engine: стратегия разрешения конфликтов (three‑way, keep‑both).
+- [x] Sync engine: SQLite индекс (items/states).
+- [x] Sync engine: sync cursor persistence.
+- [x] Sync engine: ops_queue persistence.
+- [x] Sync engine: backoff helper (exponential + jitter).
 
 ---
 

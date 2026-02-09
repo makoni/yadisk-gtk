@@ -9,7 +9,7 @@ const DEFAULT_BASE_URL: &str = "https://cloud-api.yandex.net";
 pub enum YadiskError {
     #[error("request failed: {0}")]
     Request(#[from] reqwest::Error),
-    #[error("invalid base url: {0}")]
+    #[error("invalid url: {0}")]
     Url(#[from] url::ParseError),
     #[error("api returned {status}: {body}")]
     Api { status: StatusCode, body: String },
@@ -137,6 +137,21 @@ impl YadiskClient {
         Ok(Some(Self::handle_response(response).await?))
     }
 
+    pub async fn get_operation_status(
+        &self,
+        operation_url: &str,
+    ) -> Result<OperationStatus, YadiskError> {
+        let url = Url::parse(operation_url)?;
+        let response = self
+            .http
+            .get(url)
+            .header("Authorization", self.auth_header_value())
+            .send()
+            .await?;
+        let info: OperationInfo = Self::handle_response(response).await?;
+        Ok(info.status)
+    }
+
     pub async fn list_directory(
         &self,
         path: &str,
@@ -242,6 +257,19 @@ pub struct Resource {
 pub enum ResourceType {
     File,
     Dir,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationStatus {
+    Success,
+    Failure,
+    InProgress,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OperationInfo {
+    pub status: OperationStatus,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
