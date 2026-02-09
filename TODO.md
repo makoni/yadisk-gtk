@@ -15,9 +15,15 @@
 - [x] REST API client: `get_disk_info`/`get_resource` + unit‑tests.
 - [x] REST API client: download/upload link методы.
 - [x] REST API client: list_directory с `_embedded.items`.
+- [x] REST API client: create_folder (PUT /resources).
+- [x] REST API client: move_resource (operation link).
+- [x] REST API client: copy_resource (operation link).
+- [x] REST API client: delete_resource (204/operation link).
 - [x] Token storage: secret portal (Flatpak) + keyring fallback (classic).
 - [x] OAuth helper: authorize URL + code обмен на токен.
 - [x] OAuth flow + хранение токенов в Keyring/portal.
+- [x] Sync engine: базовая очередь операций (TDD).
+- [x] Sync engine: стратегия разрешения конфликтов (three‑way, keep‑both).
 
 ---
 

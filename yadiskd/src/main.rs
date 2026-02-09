@@ -1,5 +1,6 @@
 mod oauth_flow;
 mod storage;
+mod sync;
 
 use anyhow::Context;
 use oauth_flow::OAuthFlow;

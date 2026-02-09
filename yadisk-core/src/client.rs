@@ -60,6 +60,83 @@ impl YadiskClient {
         Self::handle_response(response).await
     }
 
+    pub async fn create_folder(&self, path: &str) -> Result<Resource, YadiskError> {
+        let mut url = self.endpoint("/v1/disk/resources")?;
+        url.query_pairs_mut().append_pair("path", path);
+        let response = self
+            .http
+            .put(url)
+            .header("Authorization", self.auth_header_value())
+            .send()
+            .await?;
+        Self::handle_response(response).await
+    }
+
+    pub async fn move_resource(
+        &self,
+        from: &str,
+        path: &str,
+        overwrite: bool,
+    ) -> Result<TransferLink, YadiskError> {
+        let mut url = self.endpoint("/v1/disk/resources/move")?;
+        url.query_pairs_mut()
+            .append_pair("from", from)
+            .append_pair("path", path)
+            .append_pair("overwrite", if overwrite { "true" } else { "false" });
+        let response = self
+            .http
+            .put(url)
+            .header("Authorization", self.auth_header_value())
+            .send()
+            .await?;
+        Self::handle_response(response).await
+    }
+
+    pub async fn copy_resource(
+        &self,
+        from: &str,
+        path: &str,
+        overwrite: bool,
+    ) -> Result<TransferLink, YadiskError> {
+        let mut url = self.endpoint("/v1/disk/resources/copy")?;
+        url.query_pairs_mut()
+            .append_pair("from", from)
+            .append_pair("path", path)
+            .append_pair("overwrite", if overwrite { "true" } else { "false" });
+        let response = self
+            .http
+            .put(url)
+            .header("Authorization", self.auth_header_value())
+            .send()
+            .await?;
+        Self::handle_response(response).await
+    }
+
+    pub async fn delete_resource(
+        &self,
+        path: &str,
+        permanently: bool,
+    ) -> Result<Option<TransferLink>, YadiskError> {
+        let mut url = self.endpoint("/v1/disk/resources")?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("path", path);
+            if permanently {
+                query.append_pair("permanently", "true");
+            }
+        }
+        let response = self
+            .http
+            .delete(url)
+            .header("Authorization", self.auth_header_value())
+            .send()
+            .await?;
+        if response.status() == StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        Ok(Some(Self::handle_response(response).await?))
+    }
+
     pub async fn list_directory(
         &self,
         path: &str,

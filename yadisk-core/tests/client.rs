@@ -143,3 +143,137 @@ async fn list_directory_returns_embedded_items() {
     assert_eq!(list.items[0].name, "A.txt");
     assert_eq!(list.items[1].resource_type, ResourceType::Dir);
 }
+
+#[tokio::test]
+async fn create_folder_uses_put() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs/NewFolder"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "path": "/Docs/NewFolder",
+            "name": "NewFolder",
+            "type": "dir"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let resource = client.create_folder("/Docs/NewFolder").await.unwrap();
+
+    assert_eq!(resource.resource_type, ResourceType::Dir);
+    assert_eq!(resource.name, "NewFolder");
+}
+
+#[tokio::test]
+async fn move_resource_returns_operation_link() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/disk/resources/move"))
+        .and(query_param("from", "/Docs/A.txt"))
+        .and(query_param("path", "/Docs/B.txt"))
+        .and(query_param("overwrite", "true"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "href": "https://cloud-api.yandex.net/v1/disk/operations/1",
+            "method": "GET",
+            "templated": false
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let link = client
+        .move_resource("/Docs/A.txt", "/Docs/B.txt", true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        link.href.as_str(),
+        "https://cloud-api.yandex.net/v1/disk/operations/1"
+    );
+}
+
+#[tokio::test]
+async fn copy_resource_returns_operation_link() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/disk/resources/copy"))
+        .and(query_param("from", "/Docs/A.txt"))
+        .and(query_param("path", "/Docs/C.txt"))
+        .and(query_param("overwrite", "false"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "href": "https://cloud-api.yandex.net/v1/disk/operations/2",
+            "method": "GET",
+            "templated": false
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let link = client
+        .copy_resource("/Docs/A.txt", "/Docs/C.txt", false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        link.href.as_str(),
+        "https://cloud-api.yandex.net/v1/disk/operations/2"
+    );
+}
+
+#[tokio::test]
+async fn delete_resource_returns_none_on_no_content() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs/Delete.txt"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let response = client
+        .delete_resource("/Docs/Delete.txt", false)
+        .await
+        .unwrap();
+
+    assert!(response.is_none());
+}
+
+#[tokio::test]
+async fn delete_resource_returns_operation_link() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("DELETE"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs/Delete.txt"))
+        .and(query_param("permanently", "true"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "href": "https://cloud-api.yandex.net/v1/disk/operations/3",
+            "method": "GET",
+            "templated": false
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let response = client
+        .delete_resource("/Docs/Delete.txt", true)
+        .await
+        .unwrap();
+
+    let link = response.expect("expected operation link");
+    assert_eq!(
+        link.href.as_str(),
+        "https://cloud-api.yandex.net/v1/disk/operations/3"
+    );
+}
