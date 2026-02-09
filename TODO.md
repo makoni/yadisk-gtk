@@ -257,10 +257,12 @@
 
 ## 14) Тестирование
 
+- Использовать TDD: сначала тест/ожидаемое поведение, затем реализация.
 - Unit‑тесты API‑клиента (mock HTTP).
 - Интеграционные тесты sync engine (фейковый REST сервер).
 - FUSE‑тесты (mount in temp dir + fs operations).
 - DBus‑тесты (zbus + mock service).
+- Перед PR/релизом: `cargo fmt` и `cargo clippy -- -D warnings`.
 
 ---
 
@@ -272,4 +274,3 @@
 4) MVP‑4: Nautilus extension + эмблемы + контекстное меню.
 5) MVP‑5: libcloudproviders + UI settings.
 6) MVP‑6: Flatpak packaging + host‑helper strategy.
-
