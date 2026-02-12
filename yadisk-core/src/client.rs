@@ -250,6 +250,10 @@ pub struct Resource {
     pub size: Option<u64>,
     #[serde(default)]
     pub modified: Option<String>,
+    #[serde(default)]
+    pub resource_id: Option<String>,
+    #[serde(default)]
+    pub md5: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]

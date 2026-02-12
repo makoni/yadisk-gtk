@@ -39,7 +39,9 @@ async fn get_resource_encodes_path() {
             "name": "Hello World.txt",
             "type": "file",
             "size": 12,
-            "modified": "2024-01-01T00:00:00Z"
+            "modified": "2024-01-01T00:00:00Z",
+            "resource_id": "rid-1",
+            "md5": "deadbeef"
         })))
         .mount(&server)
         .await;
@@ -49,6 +51,8 @@ async fn get_resource_encodes_path() {
 
     assert_eq!(resource.resource_type, ResourceType::File);
     assert_eq!(resource.size, Some(12));
+    assert_eq!(resource.resource_id.as_deref(), Some("rid-1"));
+    assert_eq!(resource.md5.as_deref(), Some("deadbeef"));
 }
 
 #[tokio::test]
