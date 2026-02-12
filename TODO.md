@@ -29,6 +29,16 @@
 - [x] Sync engine: sync cursor persistence.
 - [x] Sync engine: ops_queue persistence.
 - [x] Sync engine: backoff helper (exponential + jitter).
+- [x] Resource metadata: `resource_id`/`md5` fields in REST deserialization.
+- [x] Sync engine: cache path mapping helper (`cache_path_for`).
+- [x] Sync engine: transfer client (download via transfer link).
+- [x] Sync engine: transfer client (upload via transfer link).
+- [x] Sync engine: runnable engine skeleton (`SyncEngine`).
+- [x] Sync engine: remote directory indexing (`sync_directory_once`).
+- [x] Sync engine: persisted op enqueue for download/upload.
+- [x] Sync engine: execute download/upload ops and mark cached.
+- [x] Sync engine: operation polling helper (wait with backoff).
+- [x] Sync engine: conflicts persistence (record/list).
 
 ---
 
