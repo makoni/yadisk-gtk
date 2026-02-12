@@ -127,6 +127,15 @@ pub struct SyncCursor {
     pub last_sync: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictRecord {
+    pub id: i64,
+    pub path: String,
+    pub renamed_local: String,
+    pub created: i64,
+    pub reason: String,
+}
+
 pub struct IndexStore {
     pool: SqlitePool,
 }
@@ -164,6 +173,12 @@ impl IndexStore {
 
         sqlx::query(
             "\n            CREATE TABLE IF NOT EXISTS ops_queue (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                kind TEXT NOT NULL,\n                path TEXT NOT NULL,\n                attempt INTEGER NOT NULL\n            );\n            ",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "\n            CREATE TABLE IF NOT EXISTS conflicts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                path TEXT NOT NULL,\n                renamed_local TEXT NOT NULL,\n                created INTEGER NOT NULL,\n                reason TEXT NOT NULL\n            );\n            ",
         )
         .execute(&self.pool)
         .await?;
@@ -257,6 +272,15 @@ impl IndexStore {
         }))
     }
 
+    pub async fn set_pinned(&self, item_id: i64, pinned: bool) -> Result<(), IndexError> {
+        sqlx::query("UPDATE states SET pinned = ?1 WHERE item_id = ?2")
+            .bind(if pinned { 1 } else { 0 })
+            .bind(item_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_sync_cursor(
         &self,
         cursor: Option<&str>,
@@ -325,6 +349,46 @@ impl IndexStore {
             .await?;
 
         Ok(Some(operation))
+    }
+
+    pub async fn record_conflict(
+        &self,
+        path: &str,
+        renamed_local: &str,
+        created: i64,
+        reason: &str,
+    ) -> Result<i64, IndexError> {
+        let result = sqlx::query(
+            "INSERT INTO conflicts (path, renamed_local, created, reason) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(path)
+        .bind(renamed_local)
+        .bind(created)
+        .bind(reason)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn list_conflicts(&self) -> Result<Vec<ConflictRecord>, IndexError> {
+        let rows = sqlx::query(
+            "SELECT id, path, renamed_local, created, reason FROM conflicts ORDER BY id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(ConflictRecord {
+                id: row.try_get("id")?,
+                path: row.try_get("path")?,
+                renamed_local: row.try_get("renamed_local")?,
+                created: row.try_get("created")?,
+                reason: row.try_get("reason")?,
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -401,6 +465,10 @@ mod tests {
         assert_eq!(state.state, FileState::Cached);
         assert!(state.pinned);
         assert_eq!(state.last_error.as_deref(), Some("ok"));
+
+        store.set_pinned(inserted.id, false).await.unwrap();
+        let state = store.get_state(inserted.id).await.unwrap().unwrap();
+        assert!(!state.pinned);
     }
 
     #[tokio::test]
@@ -429,5 +497,19 @@ mod tests {
 
         assert_eq!(fetched, op);
         assert!(store.dequeue_op().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn records_and_lists_conflicts() {
+        let store = make_store().await;
+        store
+            .record_conflict("/Docs/A.txt", "/Docs/A (conflict).txt", 123, "both-changed")
+            .await
+            .unwrap();
+
+        let conflicts = store.list_conflicts().await.unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].path, "/Docs/A.txt");
+        assert_eq!(conflicts[0].reason, "both-changed");
     }
 }
