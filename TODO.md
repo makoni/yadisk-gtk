@@ -169,6 +169,22 @@
 - [x] Добавить тесты миграций БД (upgrade from previous schema).
 - [x] Добавить smoke-test сценарии sandbox/portal и host-helper режимов в CI (по возможности).
 
+### M) Реализация полноценного демона (осталось сделать)
+- [ ] **D-Bus сервис** — запуск zbus сервера в `main.rs` для обработки запросов от интеграций
+  - [ ] Интегрировать `SyncDbusService` из `dbus_api.rs`
+  - [ ] Регистрация D-Bus имени `com.yadisk.Sync1`
+  - [ ] Обработка методов: Download, Pin, Evict, Retry, GetState, ListConflicts
+  - [ ] Отправка сигналов: StateChanged, ConflictAdded
+- [ ] **Фоновый цикл синхронизации** — бесконечный цикл в daemon'е:
+  - [ ] Polling изменений в облаке (polling+diff strategy)
+  - [ ] Обработка локальных событий через `notify` watcher
+  - [ ] Выполнение операций из очереди с backoff/retry
+  - [ ] Управление кэшем (LRU eviction)
+- [ ] **systemd unit** — правильная конфигурация:
+  - [ ] `yadiskd.service` с restart policy и dependencies
+  - [ ] `yadiskd.path` для auto-restart при изменении токена
+  - [ ] Логирование через journald
+
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.ru/dev/disk/rest/
 - Yandex Disk API overview: https://yandex.ru/dev/disk/
