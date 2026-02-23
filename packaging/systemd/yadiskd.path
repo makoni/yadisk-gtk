@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Yandex Disk token for daemon restart
+
+[Path]
+PathChanged=%h/.config/yadisk-gtk/secret-portal/yadisk_token.portal
+Unit=yadiskd.service
+
+[Install]
+WantedBy=default.target

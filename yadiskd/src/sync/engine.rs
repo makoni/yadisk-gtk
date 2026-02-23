@@ -11,7 +11,9 @@ use yadisk_core::{ApiErrorClass, OperationStatus, ResourceType, YadiskClient};
 
 use super::backoff::Backoff;
 use super::conflict::{self, ConflictDecision, FileMetadata};
-use super::index::{FileState, IndexError, IndexStore, ItemInput, ItemType, StateMeta};
+use super::index::{
+    ConflictRecord, FileState, IndexError, IndexStore, ItemInput, ItemRecord, ItemType, StateMeta,
+};
 use super::local_watcher::LocalEvent;
 use super::paths::{PathError, cache_path_for};
 use super::queue::{Operation, OperationKind};
@@ -87,22 +89,7 @@ impl SyncEngine {
     }
 
     pub async fn sync_directory_once(&self, path: &str) -> Result<usize, EngineError> {
-        let list = self
-            .client
-            .list_directory_all(
-                path,
-                100,
-                Some(&[
-                    "path",
-                    "name",
-                    "type",
-                    "size",
-                    "modified",
-                    "md5",
-                    "resource_id",
-                ]),
-            )
-            .await?;
+        let list = self.client.list_directory_all(path, 100, None).await?;
         for item in &list {
             let input = ItemInput {
                 path: item.path.clone(),
@@ -319,6 +306,77 @@ impl SyncEngine {
         }
     }
 
+    pub async fn pin_path(&self, path: &str, pinned: bool) -> Result<(), EngineError> {
+        let item = self
+            .index
+            .get_item_by_path(path)
+            .await?
+            .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+        let state = self.index.get_state(item.id).await?;
+        let current_state = state
+            .as_ref()
+            .map(|row| row.state.clone())
+            .unwrap_or(FileState::CloudOnly);
+        let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
+        self.index
+            .set_state(item.id, current_state, pinned, last_error)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn evict_path(&self, path: &str) -> Result<(), EngineError> {
+        let item = self
+            .index
+            .get_item_by_path(path)
+            .await?
+            .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+        self.index
+            .set_state(item.id, FileState::CloudOnly, false, None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn retry_path(&self, path: &str) -> Result<(), EngineError> {
+        self.enqueue_download(path).await?;
+        Ok(())
+    }
+
+    pub async fn state_for_path(&self, path: &str) -> Result<Option<FileState>, EngineError> {
+        let Some(item) = self.index.get_item_by_path(path).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .index
+            .get_state(item.id)
+            .await?
+            .map(|state| state.state))
+    }
+
+    pub async fn list_conflicts(&self) -> Result<Vec<ConflictRecord>, EngineError> {
+        Ok(self.index.list_conflicts().await?)
+    }
+
+    pub async fn list_items_by_prefix(&self, prefix: &str) -> Result<Vec<ItemRecord>, EngineError> {
+        Ok(self.index.list_items_by_prefix(prefix).await?)
+    }
+
+    pub async fn list_states_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, FileState)>, EngineError> {
+        Ok(self.index.list_states_by_prefix(prefix).await?)
+    }
+
+    pub async fn list_path_states_with_pin_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, FileState, bool)>, EngineError> {
+        Ok(self
+            .index
+            .list_path_states_with_pin_by_prefix(prefix)
+            .await?)
+    }
+
     pub async fn resolve_conflict_and_record(
         &self,
         path: &str,
@@ -512,22 +570,7 @@ impl SyncEngine {
         let mut stack = vec![root.to_string()];
         let mut out = Vec::new();
         while let Some(path) = stack.pop() {
-            let items = self
-                .client
-                .list_directory_all(
-                    &path,
-                    100,
-                    Some(&[
-                        "path",
-                        "name",
-                        "type",
-                        "size",
-                        "modified",
-                        "md5",
-                        "resource_id",
-                    ]),
-                )
-                .await?;
+            let items = self.client.list_directory_all(&path, 100, None).await?;
             for item in items {
                 if item.resource_type == ResourceType::Dir {
                     stack.push(item.path.clone());
@@ -605,10 +648,6 @@ mod tests {
             .and(query_param("path", "/Docs"))
             .and(query_param("limit", "100"))
             .and(query_param("offset", "0"))
-            .and(query_param(
-                "fields",
-                "path,name,type,size,modified,md5,resource_id",
-            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "_embedded": {
                     "limit": 100,

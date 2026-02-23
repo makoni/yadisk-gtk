@@ -1,3 +1,9 @@
 [workspace]
-members = ["yadisk-core", "yadiskd", "yadisk-fuse", "yadisk-integrations"]
+members = [
+    "yadisk-core",
+    "yadiskd",
+    "yadisk-fuse",
+    "yadisk-integrations",
+    "yadisk-nautilus",
+]
 resolver = "2"

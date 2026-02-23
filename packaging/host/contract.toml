@@ -9,5 +9,5 @@ autostart = true
 
 [filesystem]
 model = "host-helper"
-sync_root = "$HOME/YandexDisk"
+sync_root = "$HOME/Yandex Disk"
 permissions = ["sync_root_only"]

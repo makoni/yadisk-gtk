@@ -1,3 +1,4 @@
+pub mod daemon;
 pub mod dbus_api;
 pub mod oauth_flow;
 pub mod storage;

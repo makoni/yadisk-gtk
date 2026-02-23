@@ -2,7 +2,7 @@
 
 use std::{fs, path::PathBuf};
 
-use sqlx::{Row, SqlitePool, migrate::Migrator};
+use sqlx::{Row, SqlitePool, migrate::Migrator, sqlite::SqliteConnectOptions};
 use thiserror::Error;
 
 use super::queue::{Operation, OperationKind};
@@ -185,8 +185,13 @@ impl IndexStore {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let database_url = format!("sqlite://{}", db_path.to_string_lossy());
-        Self::new(&database_url).await
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options).await?;
+        let store = Self { pool };
+        store.init().await?;
+        Ok(store)
     }
 
     pub async fn init(&self) -> Result<(), IndexError> {
@@ -348,6 +353,59 @@ impl IndexStore {
             last_error_at: row.try_get("last_error_at")?,
             dirty: dirty != 0,
         }))
+    }
+
+    pub async fn list_states_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, FileState)>, IndexError> {
+        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let rows = sqlx::query(
+            "SELECT i.path, s.state
+             FROM states s
+             JOIN items i ON i.id = s.item_id
+             WHERE i.path = ?1 OR i.path LIKE ?2
+             ORDER BY i.path ASC",
+        )
+        .bind(prefix)
+        .bind(pattern)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let path: String = row.try_get("path")?;
+            let state: String = row.try_get("state")?;
+            out.push((path, FileState::parse(&state)?));
+        }
+        Ok(out)
+    }
+
+    pub async fn list_path_states_with_pin_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, FileState, bool)>, IndexError> {
+        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let rows = sqlx::query(
+            "SELECT i.path, s.state, s.pinned
+             FROM states s
+             JOIN items i ON i.id = s.item_id
+             WHERE i.path = ?1 OR i.path LIKE ?2
+             ORDER BY i.path ASC",
+        )
+        .bind(prefix)
+        .bind(pattern)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let path: String = row.try_get("path")?;
+            let state: String = row.try_get("state")?;
+            let pinned: i64 = row.try_get("pinned")?;
+            out.push((path, FileState::parse(&state)?, pinned != 0));
+        }
+        Ok(out)
     }
 
     pub async fn list_pinned_cloud_only_paths_by_prefix(

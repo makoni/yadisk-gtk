@@ -34,6 +34,7 @@ This project implements a two-way sync client for Yandex Disk with deep GNOME in
 | `yadiskd` | Daemon: D-Bus API, SQLite index, sync engine |
 | `yadisk-fuse` | FUSE bridge for Files integration |
 | `yadisk-integrations` | Nautilus extension + libcloudproviders scaffolds |
+| `yadisk-nautilus` | Native Nautilus extension (cdylib) + D-Bus action client |
 
 ## Requirements
 
@@ -66,6 +67,44 @@ YADISK_TOKEN=<your_token> cargo run -p yadiskd
 export YADISK_CLIENT_ID=<client_id>
 export YADISK_CLIENT_SECRET=<client_secret>
 cargo run -p yadiskd
+```
+
+## Native Nautilus extension (Rust, GNOME 49 baseline)
+
+Install host extension:
+
+```bash
+bash packaging/host/install-nautilus-extension.sh
+nautilus -q
+```
+
+`install-nautilus-extension.sh` автоматически определяет `extensiondir` через `pkg-config`.
+Если каталог системный и не writable, скрипт сам выполнит `sudo install ...` (попросит пароль).
+
+What it provides in Files (Nautilus):
+- state emblems (`cloud_only` / `cached` / `syncing` / `error`)
+- state-aware context menu:
+  - `Save Offline`
+  - `Download Now`
+  - `Remove Offline Copy`
+  - `Retry Sync`
+- D-Bus actions via `com.yadisk.Sync1` (`Pin`, `Download`, `Evict`, `Retry`)
+- live status refresh from daemon signals
+
+Optional smoke check:
+
+```bash
+bash packaging/host/nautilus-extension-smoke.sh
+```
+
+Requirements:
+- GNOME Files 49 + `libnautilus-extension` development/runtime package on host
+- running `yadiskd` daemon in user session
+
+For custom/non-standard extension path, set:
+
+```bash
+export YADISK_NAUTILUS_EXT_DIR=/path/to/nautilus/extensions-4
 ```
 
 ## Flatpak Integration

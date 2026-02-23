@@ -9,6 +9,10 @@ ExecStart=%h/.local/bin/yadiskd
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
+Environment=YADISK_SYNC_DIR=%h/Yandex Disk
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=yadiskd
 
 [Install]
 WantedBy=default.target

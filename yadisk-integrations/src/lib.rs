@@ -25,6 +25,33 @@ impl NautilusExtensionMvp {
     pub fn context_actions() -> Vec<&'static str> {
         vec!["Download", "Pin", "Evict", "Retry"]
     }
+
+    pub fn state_badge_label(state: SyncUiState) -> &'static str {
+        match state {
+            SyncUiState::CloudOnly => "Only in cloud",
+            SyncUiState::Cached => "Available offline",
+            SyncUiState::Syncing => "Syncing",
+            SyncUiState::Error => "Sync error",
+        }
+    }
+
+    pub fn primary_action_for_state(state: SyncUiState) -> Option<&'static str> {
+        match state {
+            SyncUiState::CloudOnly => Some("Save Offline"),
+            SyncUiState::Cached => Some("Remove Offline Copy"),
+            SyncUiState::Syncing => None,
+            SyncUiState::Error => Some("Retry"),
+        }
+    }
+
+    pub fn context_actions_for_state(state: SyncUiState) -> Vec<&'static str> {
+        match state {
+            SyncUiState::CloudOnly => vec!["Save Offline", "Download", "Pin"],
+            SyncUiState::Cached => vec!["Remove Offline Copy", "Evict", "Retry"],
+            SyncUiState::Syncing => vec!["Retry"],
+            SyncUiState::Error => vec!["Retry", "Save Offline"],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +112,22 @@ mod tests {
         assert_eq!(
             NautilusExtensionMvp::context_actions(),
             vec!["Download", "Pin", "Evict", "Retry"]
+        );
+        assert_eq!(
+            NautilusExtensionMvp::context_actions_for_state(SyncUiState::CloudOnly),
+            vec!["Save Offline", "Download", "Pin"]
+        );
+        assert_eq!(
+            NautilusExtensionMvp::context_actions_for_state(SyncUiState::Cached),
+            vec!["Remove Offline Copy", "Evict", "Retry"]
+        );
+        assert_eq!(
+            NautilusExtensionMvp::primary_action_for_state(SyncUiState::CloudOnly),
+            Some("Save Offline")
+        );
+        assert_eq!(
+            NautilusExtensionMvp::state_badge_label(SyncUiState::Cached),
+            "Available offline"
         );
     }
 

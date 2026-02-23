@@ -1,10 +1,15 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::sync::RwLock;
 use zbus::{interface, object_server::SignalEmitter};
+
+use crate::sync::engine::EngineError;
+use crate::sync::engine::SyncEngine;
+use crate::sync::index::FileState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathState {
@@ -59,66 +64,172 @@ fn map_to_fdo(err: DbusServiceError) -> zbus::fdo::Error {
 
 #[derive(Default)]
 pub struct SyncDbusService {
+    backend: Option<Arc<SyncEngine>>,
     states: RwLock<HashMap<String, PathState>>,
     pinned: RwLock<HashMap<String, bool>>,
     conflicts: RwLock<Vec<ConflictInfo>>,
 }
 
 impl SyncDbusService {
-    fn validate_path(path: &str) -> Result<(), DbusServiceError> {
-        if path.is_empty() || !path.starts_with('/') {
+    pub fn with_engine(engine: Arc<SyncEngine>) -> Self {
+        Self {
+            backend: Some(engine),
+            states: RwLock::new(HashMap::new()),
+            pinned: RwLock::new(HashMap::new()),
+            conflicts: RwLock::new(Vec::new()),
+        }
+    }
+
+    fn canonical_slash_path(path: &str) -> Result<String, DbusServiceError> {
+        if path.is_empty() {
             return Err(DbusServiceError::InvalidPath);
         }
-        Ok(())
+        if let Some(rest) = path.strip_prefix("disk:/") {
+            let suffix = rest.trim_start_matches('/');
+            return Ok(if suffix.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{suffix}")
+            });
+        }
+        if path.starts_with('/') {
+            return Ok(path.to_string());
+        }
+        Err(DbusServiceError::InvalidPath)
+    }
+
+    fn canonical_disk_path(path: &str) -> Result<String, DbusServiceError> {
+        let slash = Self::canonical_slash_path(path)?;
+        let suffix = slash.trim_start_matches('/');
+        Ok(if suffix.is_empty() {
+            "disk:/".to_string()
+        } else {
+            format!("disk:/{suffix}")
+        })
+    }
+
+    fn path_candidates(path: &str) -> Result<[String; 2], DbusServiceError> {
+        let slash = Self::canonical_slash_path(path)?;
+        let disk = Self::canonical_disk_path(&slash)?;
+        Ok([slash, disk])
+    }
+
+    fn from_file_state(state: FileState) -> PathState {
+        match state {
+            FileState::CloudOnly => PathState::CloudOnly,
+            FileState::Cached => PathState::Cached,
+            FileState::Syncing => PathState::Syncing,
+            FileState::Error => PathState::Error,
+        }
+    }
+}
+
+fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
+    match err {
+        EngineError::MissingItem(_) => map_to_fdo(DbusServiceError::NotFound),
+        _ => map_to_fdo(DbusServiceError::Failed),
     }
 }
 
 #[interface(name = "com.yadisk.Sync1")]
 impl SyncDbusService {
     async fn download(&self, path: &str) -> zbus::fdo::Result<()> {
-        Self::validate_path(path).map_err(map_to_fdo)?;
-        self.states
-            .write()
-            .await
-            .insert(path.to_string(), PathState::Syncing);
+        let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        if let Some(engine) = &self.backend {
+            for candidate in [&slash, &disk] {
+                match engine.enqueue_download(candidate).await {
+                    Ok(_) => return Ok(()),
+                    Err(EngineError::MissingItem(_)) => continue,
+                    Err(err) => return Err(map_engine_error(err)),
+                }
+            }
+            return Err(map_to_fdo(DbusServiceError::NotFound));
+        }
+        self.states.write().await.insert(slash, PathState::Syncing);
         Ok(())
     }
 
     async fn pin(&self, path: &str, pin: bool) -> zbus::fdo::Result<()> {
-        Self::validate_path(path).map_err(map_to_fdo)?;
-        self.pinned.write().await.insert(path.to_string(), pin);
+        let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        if let Some(engine) = &self.backend {
+            for candidate in [&slash, &disk] {
+                match engine.pin_path(candidate, pin).await {
+                    Ok(_) => return Ok(()),
+                    Err(EngineError::MissingItem(_)) => continue,
+                    Err(err) => return Err(map_engine_error(err)),
+                }
+            }
+            return Err(map_to_fdo(DbusServiceError::NotFound));
+        }
+        self.pinned.write().await.insert(slash, pin);
         Ok(())
     }
 
     async fn evict(&self, path: &str) -> zbus::fdo::Result<()> {
-        Self::validate_path(path).map_err(map_to_fdo)?;
+        let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        if let Some(engine) = &self.backend {
+            for candidate in [&slash, &disk] {
+                match engine.evict_path(candidate).await {
+                    Ok(_) => return Ok(()),
+                    Err(EngineError::MissingItem(_)) => continue,
+                    Err(err) => return Err(map_engine_error(err)),
+                }
+            }
+            return Err(map_to_fdo(DbusServiceError::NotFound));
+        }
         self.states
             .write()
             .await
-            .insert(path.to_string(), PathState::CloudOnly);
+            .insert(slash, PathState::CloudOnly);
         Ok(())
     }
 
     async fn retry(&self, path: &str) -> zbus::fdo::Result<()> {
-        Self::validate_path(path).map_err(map_to_fdo)?;
-        self.states
-            .write()
-            .await
-            .insert(path.to_string(), PathState::Syncing);
+        let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        if let Some(engine) = &self.backend {
+            for candidate in [&slash, &disk] {
+                match engine.retry_path(candidate).await {
+                    Ok(_) => return Ok(()),
+                    Err(EngineError::MissingItem(_)) => continue,
+                    Err(err) => return Err(map_engine_error(err)),
+                }
+            }
+            return Err(map_to_fdo(DbusServiceError::NotFound));
+        }
+        self.states.write().await.insert(slash, PathState::Syncing);
         Ok(())
     }
 
     async fn get_state(&self, path: &str) -> zbus::fdo::Result<String> {
-        Self::validate_path(path).map_err(map_to_fdo)?;
+        let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        if let Some(engine) = &self.backend {
+            for candidate in [&slash, &disk] {
+                if let Some(state) = engine
+                    .state_for_path(candidate)
+                    .await
+                    .map_err(map_engine_error)?
+                {
+                    return Ok(Self::from_file_state(state).as_str().to_string());
+                }
+            }
+            return Err(map_to_fdo(DbusServiceError::NotFound));
+        }
         let states = self.states.read().await;
         let state = states
-            .get(path)
+            .get(slash.as_str())
             .ok_or(DbusServiceError::NotFound)
             .map_err(map_to_fdo)?;
         Ok(state.as_str().to_string())
     }
 
     async fn list_conflicts(&self) -> zbus::fdo::Result<Vec<(u64, String, String)>> {
+        if let Some(engine) = &self.backend {
+            let conflicts = engine.list_conflicts().await.map_err(map_engine_error)?;
+            return Ok(conflicts
+                .into_iter()
+                .map(|c| (c.id as u64, c.path, c.renamed_local))
+                .collect());
+        }
         let conflicts = self.conflicts.read().await;
         Ok(conflicts
             .iter()
@@ -127,10 +238,14 @@ impl SyncDbusService {
     }
 
     #[zbus(signal)]
-    async fn state_changed(ctxt: &SignalEmitter<'_>, path: &str, state: &str) -> zbus::Result<()>;
+    pub async fn state_changed(
+        ctxt: &SignalEmitter<'_>,
+        path: &str,
+        state: &str,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
-    async fn conflict_added(
+    pub async fn conflict_added(
         ctxt: &SignalEmitter<'_>,
         id: u64,
         path: &str,
@@ -183,5 +298,13 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn accepts_disk_prefixed_paths() {
+        let service = SyncDbusService::default();
+        service.download("disk:/Docs/A.txt").await.unwrap();
+        let state = service.get_state("disk:/Docs/A.txt").await.unwrap();
+        assert_eq!(state, "syncing");
     }
 }

@@ -145,14 +145,26 @@
 - [x] Зафиксировать host-side модель интеграции для Files (вариант A1): extension/provider ставятся в host и работают с `yadiskd` по D-Bus.
 - [x] Nautilus extension:
   - [x] MVP-скелет extension (info provider + menu provider) и подключение к D-Bus API демона.
+  - [x] Native host extension crate `yadisk-nautilus` (`cdylib`) c D-Bus proxy, state-aware menu/action model и signal listener.
   - [x] эмблемы cloud/offline/syncing/error.
   - [x] Для MVP использовать стандартные Adwaita symbolic icons (без собственного icon theme/asset pack).
   - [x] контекстные действия Download/Pin/Evict/Retry.
+  - [x] Scripts-only подход переведён в fallback/legacy; основной путь интеграции — нативный Rust extension.
   - [x] подписка на D-Bus сигналы для live updates.
 - [x] libcloudproviders provider:
   - [x] экспорт account/provider в sidebar Files.
   - [x] привязка к локальной sync точке и статусам.
   - [x] синхронизация account health/state c `yadiskd` (online/offline/error).
+
+#### J.1 Полная нативная интеграция Nautilus (GNOME 49+)
+- [x] Реальный host extension (не scripts-only), загружаемый Nautilus как расширение.
+  - [x] Зафиксирован baseline: только свежий GNOME/Nautilus (49+), без обратной совместимости со старыми ABI.
+  - [x] Реализация extension целиком на Rust (`yadisk-nautilus`) через `cdylib` и `libnautilus-extension` (API 4.1/50.rc, GNOME 49+ сигнатуры).
+  - [x] `InfoProvider`: состояние файла через D-Bus `GetState`, эмблемы cloud/cached/syncing/error.
+  - [x] `MenuProvider`: state-aware контекстные действия (`Save Offline`, `Download Now`, `Remove Offline Copy`, `Retry Sync`).
+  - [x] Вызовы действий в `yadiskd` по D-Bus (`Pin`, `Download`, `Evict`, `Retry`) с fallback путей `disk:/...` и `/...`.
+  - [x] Live updates: подписка на D-Bus сигналы `StateChanged`/`ConflictAdded` и инвалидация extension info.
+  - [x] Установка в host-путь расширений Nautilus + smoke-проверка загрузки и вызовов.
 
 ### K) Service management и packaging
 - [x] systemd --user units:
@@ -170,20 +182,21 @@
 - [x] Добавить smoke-test сценарии sandbox/portal и host-helper режимов в CI (по возможности).
 
 ### M) Реализация полноценного демона (осталось сделать)
-- [ ] **D-Bus сервис** — запуск zbus сервера в `main.rs` для обработки запросов от интеграций
-  - [ ] Интегрировать `SyncDbusService` из `dbus_api.rs`
-  - [ ] Регистрация D-Bus имени `com.yadisk.Sync1`
-  - [ ] Обработка методов: Download, Pin, Evict, Retry, GetState, ListConflicts
-  - [ ] Отправка сигналов: StateChanged, ConflictAdded
-- [ ] **Фоновый цикл синхронизации** — бесконечный цикл в daemon'е:
-  - [ ] Polling изменений в облаке (polling+diff strategy)
-  - [ ] Обработка локальных событий через `notify` watcher
-  - [ ] Выполнение операций из очереди с backoff/retry
-  - [ ] Управление кэшем (LRU eviction)
-- [ ] **systemd unit** — правильная конфигурация:
-  - [ ] `yadiskd.service` с restart policy и dependencies
-  - [ ] `yadiskd.path` для auto-restart при изменении токена
-  - [ ] Логирование через journald
+- [x] **D-Bus сервис** — запуск zbus сервера в `main.rs` для обработки запросов от интеграций
+  - [x] Интегрировать `SyncDbusService` из `dbus_api.rs`
+  - [x] Регистрация D-Bus имени `com.yadisk.Sync1`
+  - [x] Обработка методов: Download, Pin, Evict, Retry, GetState, ListConflicts
+  - [x] Отправка сигналов: StateChanged, ConflictAdded
+- [x] **Фоновый цикл синхронизации** — бесконечный цикл в daemon'е:
+  - [x] Polling изменений в облаке (polling+diff strategy)
+  - [x] Обработка локальных событий через `notify` watcher
+  - [x] Выполнение операций из очереди с backoff/retry
+  - [x] Управление кэшем (LRU eviction)
+- [x] **systemd unit** — правильная конфигурация:
+  - [x] `yadiskd.service` с restart policy и dependencies
+  - [x] `yadiskd.path` для auto-restart при изменении токена
+  - [x] Логирование через journald
+- [x] Подготовлен host-side smoke script для GNOME/D-Bus проверки: `packaging/host/gnome-live-smoke.sh`.
 
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.ru/dev/disk/rest/
