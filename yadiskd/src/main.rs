@@ -6,6 +6,8 @@ use yadiskd::token_provider::TokenProvider;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+
     let info = match std::env::var("YADISK_TOKEN") {
         Ok(token) => {
             let client = YadiskClient::new(token)?;
