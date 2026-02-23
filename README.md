@@ -61,7 +61,7 @@ cargo fmt --all
 YADISK_TOKEN=<your_token> cargo run -p yadiskd
 
 # Run daemon via OAuth flow
-# 1. Register app at https://oauth.yandex.com/
+# 1. Register app at https://oauth.yandex.ru/
 # 2. Set env vars:
 export YADISK_CLIENT_ID=<client_id>
 export YADISK_CLIENT_SECRET=<client_secret>

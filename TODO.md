@@ -170,9 +170,9 @@
 - [x] Добавить smoke-test сценарии sandbox/portal и host-helper режимов в CI (по возможности).
 
 ## 1) Документация (ссылки)
-- Yandex Disk REST API: https://yandex.com/dev/disk/rest/
-- Yandex Disk API overview: https://yandex.com/dev/disk/
-- OAuth (Yandex): https://oauth.yandex.com/
+- Yandex Disk REST API: https://yandex.ru/dev/disk/rest/
+- Yandex Disk API overview: https://yandex.ru/dev/disk/
+- OAuth (Yandex): https://oauth.yandex.ru/
 - libcloudproviders (GNOME): https://gnome.pages.gitlab.gnome.org/libcloudproviders/index.html
 - Nautilus Extension API: https://gnome.pages.gitlab.gnome.org/nautilus/
 - FUSE (Linux kernel docs): https://www.kernel.org/doc/html/latest/filesystems/fuse.html

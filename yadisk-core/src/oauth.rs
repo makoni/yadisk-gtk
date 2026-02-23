@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
-const DEFAULT_BASE_URL: &str = "https://oauth.yandex.com";
+const DEFAULT_BASE_URL: &str = "https://oauth.yandex.ru";
 
 #[derive(Debug, Error)]
 pub enum OAuthError {
