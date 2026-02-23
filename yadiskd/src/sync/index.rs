@@ -129,6 +129,27 @@ fn parse_operation_kind(value: &str) -> Result<OperationKind, IndexError> {
     }
 }
 
+fn prefix_variants(prefix: &str) -> [String; 2] {
+    if let Some(rest) = prefix.strip_prefix("disk:/") {
+        let suffix = rest.trim_start_matches('/');
+        let slash = if suffix.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{suffix}")
+        };
+        return [prefix.to_string(), slash];
+    }
+    if let Some(rest) = prefix.strip_prefix('/') {
+        let disk = if rest.is_empty() {
+            "disk:/".to_string()
+        } else {
+            format!("disk:/{}", rest)
+        };
+        return [prefix.to_string(), disk];
+    }
+    [prefix.to_string(), prefix.to_string()]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateRecord {
     pub item_id: i64,
@@ -250,15 +271,19 @@ impl IndexStore {
     }
 
     pub async fn list_items_by_prefix(&self, prefix: &str) -> Result<Vec<ItemRecord>, IndexError> {
-        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let [prefix_a, prefix_b] = prefix_variants(prefix);
+        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
+        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
         let rows = sqlx::query(
             "SELECT id, path, parent_path, name, item_type, size, modified, hash, resource_id, last_synced_hash, last_synced_modified
              FROM items
-             WHERE path = ?1 OR path LIKE ?2
+             WHERE path = ?1 OR path LIKE ?2 OR path = ?3 OR path LIKE ?4
              ORDER BY path ASC",
         )
-        .bind(prefix)
-        .bind(pattern)
+        .bind(prefix_a)
+        .bind(pattern_a)
+        .bind(prefix_b)
+        .bind(pattern_b)
         .fetch_all(&self.pool)
         .await?;
 
@@ -359,16 +384,20 @@ impl IndexStore {
         &self,
         prefix: &str,
     ) -> Result<Vec<(String, FileState)>, IndexError> {
-        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let [prefix_a, prefix_b] = prefix_variants(prefix);
+        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
+        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
         let rows = sqlx::query(
             "SELECT i.path, s.state
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE i.path = ?1 OR i.path LIKE ?2
+             WHERE i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4
              ORDER BY i.path ASC",
         )
-        .bind(prefix)
-        .bind(pattern)
+        .bind(prefix_a)
+        .bind(pattern_a)
+        .bind(prefix_b)
+        .bind(pattern_b)
         .fetch_all(&self.pool)
         .await?;
 
@@ -385,16 +414,20 @@ impl IndexStore {
         &self,
         prefix: &str,
     ) -> Result<Vec<(String, FileState, bool)>, IndexError> {
-        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let [prefix_a, prefix_b] = prefix_variants(prefix);
+        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
+        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
         let rows = sqlx::query(
             "SELECT i.path, s.state, s.pinned
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE i.path = ?1 OR i.path LIKE ?2
+             WHERE i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4
              ORDER BY i.path ASC",
         )
-        .bind(prefix)
-        .bind(pattern)
+        .bind(prefix_a)
+        .bind(pattern_a)
+        .bind(prefix_b)
+        .bind(pattern_b)
         .fetch_all(&self.pool)
         .await?;
 
@@ -412,18 +445,22 @@ impl IndexStore {
         &self,
         prefix: &str,
     ) -> Result<Vec<String>, IndexError> {
-        let pattern = format!("{}/%", prefix.trim_end_matches('/'));
+        let [prefix_a, prefix_b] = prefix_variants(prefix);
+        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
+        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
         let rows = sqlx::query(
             "SELECT i.path
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE (i.path = ?1 OR i.path LIKE ?2)
-               AND s.pinned = 1
-               AND s.state = 'cloud_only'
+             WHERE (i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4)
+                AND s.pinned = 1
+                AND s.state = 'cloud_only'
              ORDER BY i.path ASC",
         )
-        .bind(prefix)
-        .bind(pattern)
+        .bind(prefix_a)
+        .bind(pattern_a)
+        .bind(prefix_b)
+        .bind(pattern_b)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
@@ -692,6 +729,40 @@ mod tests {
         store.set_pinned(inserted.id, false).await.unwrap();
         let state = store.get_state(inserted.id).await.unwrap().unwrap();
         assert!(!state.pinned);
+    }
+
+    #[tokio::test]
+    async fn disk_prefix_queries_match_slash_paths() {
+        let store = make_store().await;
+        let item = store
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(12),
+                modified: Some(1_700_000_000),
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        store
+            .set_state(item.id, FileState::CloudOnly, true, None)
+            .await
+            .unwrap();
+
+        let items = store.list_items_by_prefix("disk:/").await.unwrap();
+        assert_eq!(items.len(), 1);
+        let states = store.list_states_by_prefix("disk:/").await.unwrap();
+        assert_eq!(states.len(), 1);
+        let pinned = store
+            .list_pinned_cloud_only_paths_by_prefix("disk:/")
+            .await
+            .unwrap();
+        assert_eq!(pinned, vec!["/Docs/A.txt".to_string()]);
     }
 
     #[tokio::test]

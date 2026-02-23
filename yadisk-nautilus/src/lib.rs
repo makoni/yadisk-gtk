@@ -106,10 +106,10 @@ pub enum SyncSignalEvent {
 
 pub fn emblem_for_state(state: SyncUiState) -> &'static str {
     match state {
-        SyncUiState::CloudOnly => "emblem-downloads",
-        SyncUiState::Cached => "emblem-ok",
-        SyncUiState::Syncing => "emblem-synchronizing",
-        SyncUiState::Error => "emblem-important",
+        SyncUiState::CloudOnly => "emblem-default-symbolic",
+        SyncUiState::Cached => "emblem-ok-symbolic",
+        SyncUiState::Syncing => "emblem-synchronizing-symbolic",
+        SyncUiState::Error => "emblem-important-symbolic",
     }
 }
 
@@ -966,7 +966,10 @@ mod tests {
 
     #[test]
     fn maps_state_to_emblem_and_actions() {
-        assert_eq!(emblem_for_state(SyncUiState::CloudOnly), "emblem-downloads");
+        assert_eq!(
+            emblem_for_state(SyncUiState::CloudOnly),
+            "emblem-default-symbolic"
+        );
         assert_eq!(
             visible_actions_for_state(SyncUiState::CloudOnly),
             vec![NautilusAction::SaveOffline, NautilusAction::DownloadNow]
