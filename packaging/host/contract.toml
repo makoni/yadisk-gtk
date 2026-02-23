@@ -1,0 +1,13 @@
+[dbus]
+name = "com.yadisk.Sync1"
+path = "/com/yadisk/Sync1"
+interface = "com.yadisk.Sync1"
+
+[startup]
+discovery = ["systemd --user", "dbus name ownership"]
+autostart = true
+
+[filesystem]
+model = "host-helper"
+sync_root = "$HOME/YandexDisk"
+permissions = ["sync_root_only"]

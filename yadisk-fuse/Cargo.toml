@@ -1,0 +1,13 @@
+[package]
+name = "yadisk-fuse"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+thiserror = "2.0"
+yadiskd = { path = "../yadiskd" }
+
+[dev-dependencies]
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }

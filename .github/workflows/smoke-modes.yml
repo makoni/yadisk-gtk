@@ -1,0 +1,32 @@
+name: Smoke Modes
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  sandbox-portal-smoke:
+    runs-on: ubuntu-latest
+    env:
+      FLATPAK_ID: com.yadisk.Gtk
+      YADISK_ENABLE_SECRET_PORTAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run sandbox/portal smoke tests
+        run: |
+          cargo test -p yadiskd storage::secret_portal::tests::parses_truthy_flags -- --nocapture
+          cargo test -p yadiskd tests::retries_once_after_unauthorized_with_refreshed_token -- --nocapture
+
+  host-helper-smoke:
+    runs-on: ubuntu-latest
+    env:
+      YADISK_DISABLE_SECRET_PORTAL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run host-helper smoke tests
+        run: |
+          cargo test -p yadisk-fuse -- --nocapture
+          cargo test -p yadisk-integrations -- --nocapture

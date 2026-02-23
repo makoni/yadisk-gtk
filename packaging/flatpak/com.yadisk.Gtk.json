@@ -1,0 +1,13 @@
+{
+  "app-id": "com.yadisk.Gtk",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "47",
+  "sdk": "org.gnome.Sdk",
+  "command": "yadisk-ui",
+  "finish-args": [
+    "--share=network",
+    "--talk-name=org.freedesktop.portal.Desktop",
+    "--talk-name=org.freedesktop.portal.Secret"
+  ],
+  "modules": []
+}

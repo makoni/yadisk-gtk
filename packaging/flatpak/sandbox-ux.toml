@@ -1,0 +1,8 @@
+[mode]
+primary = "A1-host-helper"
+fallback = "A2-sandbox-only"
+
+[a2_ux]
+files_in_nautilus = false
+in_app_browser = true
+cache_location = "~/.var/app/com.yadisk.Gtk/cache"

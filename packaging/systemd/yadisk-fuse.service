@@ -1,0 +1,13 @@
+[Unit]
+Description=Yandex Disk FUSE mount lifecycle
+After=yadiskd.service
+Requires=yadiskd.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/yadisk-fuse --mount %h/YandexDisk
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

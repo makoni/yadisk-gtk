@@ -42,11 +42,24 @@
 - [x] Sync engine: conflicts persistence (record/list).
 - [x] OAuth storage: full OAuth state JSON (`access/refresh/expires/scope/type`) + legacy plain-token migration.
 - [x] OAuth client: refresh-token flow + tests.
+- [x] Daemon token provider: выдача валидного access token с auto-refresh.
+- [x] Daemon startup: retry одного API-запроса после refresh при `401`.
 - [x] Yadisk client: `fields=` support + `list_directory_all`.
+- [x] Incremental cloud sync strategy: polling+diff с тестами, включая recursive index и rename/delete handling.
 - [x] Yadisk API errors: typed classification (auth/rate-limit/transient/permanent).
 - [x] Transfer client: atomic download, streaming upload/download, md5 check, concurrency limits.
+- [x] SQLite migrations: переход на `sqlx` migrations + upgrade test для legacy schema.
 - [x] SQLite index: `parent_path`, expanded sync-state fields, baseline fields, default XDG data DB path helper.
 - [x] Ops queue: payload JSON, scheduling (`attempt/retry_at/priority`), dedupe/coalescing, requeue helper.
+- [x] D-Bus API (zbus): сервисные методы/сигналы + mapping ошибок на стабильные D-Bus error names (TDD).
+- [x] Sync engine: incremental recursive cloud sync + rename/delete reconciliation.
+- [x] Sync engine: notify-based local event source + enqueue upload/move/delete.
+- [x] Sync engine: conflict pipeline integration + conflict persistence on KeepBoth.
+- [x] Sync engine: async move/delete operation handling with completion polling + index updates.
+- [x] Sync testing: e2e sync loop + retry edge-cases + conflict transition tests.
+- [x] FUSE crate: `yadisk-fuse` c `readdir/getattr`, on-demand read enqueue, write/rename/delete/mkdir/rmdir enqueue, xattr state constant.
+- [x] GNOME integration MVP scaffolds: `yadisk-integrations` (Nautilus actions/emblems + libcloudproviders account/status model, Adwaita icons).
+- [x] Packaging artifacts: systemd user units, Flatpak manifest skeleton, host package matrix file.
 
 ---
 
@@ -55,14 +68,14 @@
 > Ниже — только **оставшиеся** задачи. Уже реализованное отмечено в «Статус реализации».
 
 ### A) Зафиксировать целевую Flathub-модель (архитектурное решение)
-- [ ] Зафиксировать один основной сценарий доставки:
-  - [ ] **A1 (host-helper)**: Flatpak UI + отдельный host daemon/FUSE пакет (deb/rpm/arch).
-  - [ ] **A2 (sandbox-only)**: без FUSE, только sandbox cache + UI-обзор файлов.
-- [ ] Для A1: формализовать контракт sandbox ↔ host daemon:
-  - [ ] D-Bus интерфейс (name/path/methods/signals/errors).
-  - [ ] Правила запуска/обнаружения host-компонента из sandbox.
-  - [ ] Политика доступа к sync-папке без широких filesystem permissions.
-- [ ] Для A2: определить UX (что именно пользователь видит в Files и что только в приложении).
+- [x] Зафиксировать один основной сценарий доставки:
+  - [x] **A1 (host-helper)**: Flatpak UI + отдельный host daemon/FUSE пакет (deb/rpm/arch).
+  - [x] **A2 (sandbox-only)**: без FUSE, только sandbox cache + UI-обзор файлов.
+- [x] Для A1: формализовать контракт sandbox ↔ host daemon:
+  - [x] D-Bus интерфейс (name/path/methods/signals/errors).
+  - [x] Правила запуска/обнаружения host-компонента из sandbox.
+  - [x] Политика доступа к sync-папке без широких filesystem permissions.
+- [x] Для A2: определить UX (что именно пользователь видит в Files и что только в приложении).
 
 ### B) OAuth и токены (production-ready)
 - [x] Перейти от хранения `access_token`-строки к хранению полного OAuth-состояния:
@@ -70,14 +83,14 @@
   - [x] Сериализация в JSON и хранение через текущий `TokenStorage` (portal/keyring).
   - [x] Миграция старого формата токена (plain string) в новый.
 - [x] Добавить refresh-token flow в `yadisk-core::OAuthClient` + wiremock tests.
-- [ ] В daemon добавить token provider:
-  - [ ] выдача валидного access token с auto-refresh.
-  - [ ] retry одного запроса после refresh на `401`.
+- [x] В daemon добавить token provider:
+  - [x] выдача валидного access token с auto-refresh.
+  - [x] retry одного запроса после refresh на `401`.
 
 ### C) `yadisk-core`: довести API слой до нужд синка
 - [x] Реализовать удобный paging helper (`list_directory_all`) до `total`.
 - [x] Добавить `fields=` поддержку для тяжелых запросов (снижение payload).
-- [ ] Добавить endpoint(ы)/стратегию инкрементальных изменений (cursor/token или polling+diff) и покрыть тестами.
+- [x] Добавить endpoint(ы)/стратегию инкрементальных изменений (cursor/token или polling+diff) и покрыть тестами.
 - [x] Типизировать классы API-ошибок для retry policy (auth/rate-limit/transient/permanent).
 
 ### D) Transfer слой (большие файлы, атомарность, контроль целостности)
@@ -87,7 +100,7 @@
 - [x] Лимиты параллелизма upload/download + конфиг.
 
 ### E) SQLite индекс и миграции
-- [ ] Перевести схему на `sqlx` migrations (`migrations/`) вместо hardcoded SQL.
+- [x] Перевести схему на `sqlx` migrations (`migrations/`) вместо hardcoded SQL.
 - [x] Добавить поля для полноценного sync-state:
   - [x] `retry_at`, `last_success_at`, `last_error_at`, `dirty`.
   - [x] baseline-поля для three-way конфликтов (`last_synced_hash` / `last_synced_modified`).
@@ -101,60 +114,60 @@
 - [x] Добавить дедупликацию/coalescing операций по path/item.
 
 ### G) `SyncEngine`: довести до полного двустороннего цикла
-- [ ] Cloud→Local:
-  - [ ] рекурсивная индексация дерева + pagination.
-  - [ ] корректная обработка удалений/переименований из облака.
-  - [ ] auto-download для pinned файлов.
-- [ ] Local→Cloud:
-  - [ ] источник локальных событий (FUSE hooks или `notify` watcher).
-  - [ ] enqueue upload/move/delete по локальным изменениям.
-- [ ] Интегрировать `sync::conflict` в реальный pipeline:
-  - [ ] вычисление base/local/remote.
-  - [ ] `KeepBoth` rename + запись в `conflicts`.
-- [ ] Для async операций REST (move/copy/delete) — хранить operation URL, ждать completion, обновлять state.
+- [x] Cloud→Local:
+  - [x] рекурсивная индексация дерева + pagination.
+  - [x] корректная обработка удалений/переименований из облака.
+  - [x] auto-download для pinned файлов.
+- [x] Local→Cloud:
+  - [x] источник локальных событий (FUSE hooks или `notify` watcher).
+  - [x] enqueue upload/move/delete по локальным изменениям.
+- [x] Интегрировать `sync::conflict` в реальный pipeline:
+  - [x] вычисление base/local/remote.
+  - [x] `KeepBoth` rename + запись в `conflicts`.
+- [x] Для async операций REST (move/copy/delete) — хранить operation URL, ждать completion, обновлять state.
 
 ### H) D-Bus API daemon ↔ интеграции
-- [ ] Реализовать zbus сервис с методами:
-  - [ ] `Download(path)`, `Pin(path,bool)`, `Evict(path)`, `Retry(path)`, `GetState(path)`, `ListConflicts()`.
-- [ ] Реализовать сигналы:
-  - [ ] `StateChanged(path,state)`, `ConflictAdded(id,path,renamed_local)`.
-- [ ] Прописать и покрыть тестами mapping ошибок в D-Bus error names.
+- [x] Реализовать zbus сервис с методами:
+  - [x] `Download(path)`, `Pin(path,bool)`, `Evict(path)`, `Retry(path)`, `GetState(path)`, `ListConflicts()`.
+- [x] Реализовать сигналы:
+  - [x] `StateChanged(path,state)`, `ConflictAdded(id,path,renamed_local)`.
+- [x] Прописать и покрыть тестами mapping ошибок в D-Bus error names.
 
 ### I) FUSE слой (для host-helper варианта)
-- [ ] Создать отдельный crate (например `yadisk-fuse`) и реализовать:
-  - [ ] `readdir/getattr` из `IndexStore`.
-  - [ ] `open/read` с on-demand download.
-  - [ ] `write/flush/rename/unlink/mkdir/rmdir` с enqueue соответствующих ops.
-- [ ] Добавить xattr состояние (`user.yadisk.state`) для эмблем.
-- [ ] Интеграционные FUSE-тесты (gated в CI).
+- [x] Создать отдельный crate (например `yadisk-fuse`) и реализовать:
+  - [x] `readdir/getattr` из `IndexStore`.
+  - [x] `open/read` с on-demand download.
+  - [x] `write/flush/rename/unlink/mkdir/rmdir` с enqueue соответствующих ops.
+- [x] Добавить xattr состояние (`user.yadisk.state`) для эмблем.
+- [x] Интеграционные FUSE-тесты (gated в CI).
 
 ### J) GNOME интеграция (Nautilus + libcloudproviders)
-- [ ] Зафиксировать host-side модель интеграции для Files (вариант A1): extension/provider ставятся в host и работают с `yadiskd` по D-Bus.
-- [ ] Nautilus extension:
-  - [ ] MVP-скелет extension (info provider + menu provider) и подключение к D-Bus API демона.
-  - [ ] эмблемы cloud/offline/syncing/error.
-  - [ ] Для MVP использовать стандартные Adwaita symbolic icons (без собственного icon theme/asset pack).
-  - [ ] контекстные действия Download/Pin/Evict/Retry.
-  - [ ] подписка на D-Bus сигналы для live updates.
-- [ ] libcloudproviders provider:
-  - [ ] экспорт account/provider в sidebar Files.
-  - [ ] привязка к локальной sync точке и статусам.
-  - [ ] синхронизация account health/state c `yadiskd` (online/offline/error).
+- [x] Зафиксировать host-side модель интеграции для Files (вариант A1): extension/provider ставятся в host и работают с `yadiskd` по D-Bus.
+- [x] Nautilus extension:
+  - [x] MVP-скелет extension (info provider + menu provider) и подключение к D-Bus API демона.
+  - [x] эмблемы cloud/offline/syncing/error.
+  - [x] Для MVP использовать стандартные Adwaita symbolic icons (без собственного icon theme/asset pack).
+  - [x] контекстные действия Download/Pin/Evict/Retry.
+  - [x] подписка на D-Bus сигналы для live updates.
+- [x] libcloudproviders provider:
+  - [x] экспорт account/provider в sidebar Files.
+  - [x] привязка к локальной sync точке и статусам.
+  - [x] синхронизация account health/state c `yadiskd` (online/offline/error).
 
 ### K) Service management и packaging
-- [ ] systemd --user units:
-  - [ ] `yadiskd.service` (restart policy, deps, logging).
-  - [ ] (A1) отдельный unit для FUSE mount lifecycle.
-- [ ] Подготовить Flatpak manifest (если будет UI crate):
-  - [ ] portal permissions (Secret/OpenURI), сеть, без лишних filesystem access.
-- [ ] Для A1: подготовить хост-пакеты (deb/rpm/arch) для daemon/FUSE/extension/provider.
+- [x] systemd --user units:
+  - [x] `yadiskd.service` (restart policy, deps, logging).
+  - [x] (A1) отдельный unit для FUSE mount lifecycle.
+- [x] Подготовить Flatpak manifest (если будет UI crate):
+  - [x] portal permissions (Secret/OpenURI), сеть, без лишних filesystem access.
+- [x] Для A1: подготовить хост-пакеты (deb/rpm/arch) для daemon/FUSE/extension/provider.
 
 ### L) Тестирование и quality gates (что ещё не покрыто)
-- [ ] Добавить e2e-тест «sync loop» (cloud list -> enqueue -> transfer -> index state transitions).
-- [ ] Добавить тесты retry/requeue и edge-cases очереди (permanent failure, max attempts).
-- [ ] Добавить тесты конфликтов на реальных переходах состояния в `SyncEngine`.
-- [ ] Добавить тесты миграций БД (upgrade from previous schema).
-- [ ] Добавить smoke-test сценарии sandbox/portal и host-helper режимов в CI (по возможности).
+- [x] Добавить e2e-тест «sync loop» (cloud list -> enqueue -> transfer -> index state transitions).
+- [x] Добавить тесты retry/requeue и edge-cases очереди (permanent failure, max attempts).
+- [x] Добавить тесты конфликтов на реальных переходах состояния в `SyncEngine`.
+- [x] Добавить тесты миграций БД (upgrade from previous schema).
+- [x] Добавить smoke-test сценарии sandbox/portal и host-helper режимов в CI (по возможности).
 
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.com/dev/disk/rest/

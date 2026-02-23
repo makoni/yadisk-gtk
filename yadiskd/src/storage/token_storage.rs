@@ -119,6 +119,7 @@ impl TokenStorage {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_token(&self) -> Result<String, StorageError> {
         Ok(self.get_oauth_state()?.access_token)
     }
