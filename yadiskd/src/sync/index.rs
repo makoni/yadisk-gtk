@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::{fs, path::PathBuf};
+
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 
@@ -9,6 +11,10 @@ use super::queue::{Operation, OperationKind};
 pub enum IndexError {
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("XDG data directory is unavailable")]
+    MissingDataDir,
     #[error("invalid item type: {0}")]
     InvalidItemType(String),
     #[error("invalid file state: {0}")]
@@ -45,24 +51,30 @@ impl ItemType {
 #[derive(Debug, Clone)]
 pub struct ItemInput {
     pub path: String,
+    pub parent_path: Option<String>,
     pub name: String,
     pub item_type: ItemType,
     pub size: Option<i64>,
     pub modified: Option<i64>,
     pub hash: Option<String>,
     pub resource_id: Option<String>,
+    pub last_synced_hash: Option<String>,
+    pub last_synced_modified: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemRecord {
     pub id: i64,
     pub path: String,
+    pub parent_path: Option<String>,
     pub name: String,
     pub item_type: ItemType,
     pub size: Option<i64>,
     pub modified: Option<i64>,
     pub hash: Option<String>,
     pub resource_id: Option<String>,
+    pub last_synced_hash: Option<String>,
+    pub last_synced_modified: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +131,18 @@ pub struct StateRecord {
     pub state: FileState,
     pub pinned: bool,
     pub last_error: Option<String>,
+    pub retry_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub last_error_at: Option<i64>,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StateMeta {
+    pub retry_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub last_error_at: Option<i64>,
+    pub dirty: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,15 +176,24 @@ impl IndexStore {
         Ok(store)
     }
 
+    pub async fn new_default() -> Result<Self, IndexError> {
+        let db_path = default_db_path()?;
+        if let Some(parent) = db_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let database_url = format!("sqlite://{}", db_path.to_string_lossy());
+        Self::new(&database_url).await
+    }
+
     pub async fn init(&self) -> Result<(), IndexError> {
         sqlx::query(
-            "\n            CREATE TABLE IF NOT EXISTS items (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                path TEXT NOT NULL UNIQUE,\n                name TEXT NOT NULL,\n                item_type TEXT NOT NULL,\n                size INTEGER,\n                modified INTEGER,\n                hash TEXT,\n                resource_id TEXT\n            );\n            ",
+            "\n            CREATE TABLE IF NOT EXISTS items (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                path TEXT NOT NULL UNIQUE,\n                parent_path TEXT,\n                name TEXT NOT NULL,\n                item_type TEXT NOT NULL,\n                size INTEGER,\n                modified INTEGER,\n                hash TEXT,\n                resource_id TEXT,\n                last_synced_hash TEXT,\n                last_synced_modified INTEGER\n            );\n            ",
         )
         .execute(&self.pool)
         .await?;
 
         sqlx::query(
-            "\n            CREATE TABLE IF NOT EXISTS states (\n                item_id INTEGER PRIMARY KEY,\n                state TEXT NOT NULL,\n                pinned INTEGER NOT NULL,\n                last_error TEXT,\n                FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE\n            );\n            ",
+            "\n            CREATE TABLE IF NOT EXISTS states (\n                item_id INTEGER PRIMARY KEY,\n                state TEXT NOT NULL,\n                pinned INTEGER NOT NULL,\n                last_error TEXT,\n                retry_at INTEGER,\n                last_success_at INTEGER,\n                last_error_at INTEGER,\n                dirty INTEGER NOT NULL DEFAULT 0,\n                FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE\n            );\n            ",
         )
         .execute(&self.pool)
         .await?;
@@ -172,7 +205,7 @@ impl IndexStore {
         .await?;
 
         sqlx::query(
-            "\n            CREATE TABLE IF NOT EXISTS ops_queue (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                kind TEXT NOT NULL,\n                path TEXT NOT NULL,\n                attempt INTEGER NOT NULL\n            );\n            ",
+            "\n            CREATE TABLE IF NOT EXISTS ops_queue (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                kind TEXT NOT NULL,\n                path TEXT NOT NULL,\n                payload TEXT,\n                attempt INTEGER NOT NULL,\n                retry_at INTEGER,\n                priority INTEGER NOT NULL DEFAULT 0,\n                UNIQUE(kind, path)\n            );\n            ",
         )
         .execute(&self.pool)
         .await?;
@@ -183,20 +216,30 @@ impl IndexStore {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_items_parent_path ON items(parent_path);")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_states_retry_at ON states(retry_at);")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
     pub async fn upsert_item(&self, item: &ItemInput) -> Result<ItemRecord, IndexError> {
         sqlx::query(
-            "\n            INSERT INTO items (path, name, item_type, size, modified, hash, resource_id)\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n            ON CONFLICT(path) DO UPDATE SET\n                name = excluded.name,\n                item_type = excluded.item_type,\n                size = excluded.size,\n                modified = excluded.modified,\n                hash = excluded.hash,\n                resource_id = excluded.resource_id;\n            ",
+            "\n            INSERT INTO items (\n                path,\n                parent_path,\n                name,\n                item_type,\n                size,\n                modified,\n                hash,\n                resource_id,\n                last_synced_hash,\n                last_synced_modified\n            )\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)\n            ON CONFLICT(path) DO UPDATE SET\n                parent_path = excluded.parent_path,\n                name = excluded.name,\n                item_type = excluded.item_type,\n                size = excluded.size,\n                modified = excluded.modified,\n                hash = excluded.hash,\n                resource_id = excluded.resource_id,\n                last_synced_hash = excluded.last_synced_hash,\n                last_synced_modified = excluded.last_synced_modified;\n            ",
         )
         .bind(&item.path)
+        .bind(&item.parent_path)
         .bind(&item.name)
         .bind(item.item_type.as_str())
         .bind(item.size)
         .bind(item.modified)
         .bind(&item.hash)
         .bind(&item.resource_id)
+        .bind(&item.last_synced_hash)
+        .bind(item.last_synced_modified)
         .execute(&self.pool)
         .await?;
 
@@ -207,7 +250,7 @@ impl IndexStore {
 
     pub async fn get_item_by_path(&self, path: &str) -> Result<Option<ItemRecord>, IndexError> {
         let row = sqlx::query(
-            "SELECT id, path, name, item_type, size, modified, hash, resource_id FROM items WHERE path = ?1",
+            "SELECT id, path, parent_path, name, item_type, size, modified, hash, resource_id, last_synced_hash, last_synced_modified FROM items WHERE path = ?1",
         )
         .bind(path)
         .fetch_optional(&self.pool)
@@ -221,12 +264,15 @@ impl IndexStore {
         Ok(Some(ItemRecord {
             id: row.try_get("id")?,
             path: row.try_get("path")?,
+            parent_path: row.try_get("parent_path")?,
             name: row.try_get("name")?,
             item_type: ItemType::parse(&item_type)?,
             size: row.try_get("size")?,
             modified: row.try_get("modified")?,
             hash: row.try_get("hash")?,
             resource_id: row.try_get("resource_id")?,
+            last_synced_hash: row.try_get("last_synced_hash")?,
+            last_synced_modified: row.try_get("last_synced_modified")?,
         }))
     }
 
@@ -237,13 +283,29 @@ impl IndexStore {
         pinned: bool,
         last_error: Option<&str>,
     ) -> Result<(), IndexError> {
+        self.set_state_with_meta(item_id, state, pinned, last_error, StateMeta::default())
+            .await
+    }
+
+    pub async fn set_state_with_meta(
+        &self,
+        item_id: i64,
+        state: FileState,
+        pinned: bool,
+        last_error: Option<&str>,
+        meta: StateMeta,
+    ) -> Result<(), IndexError> {
         sqlx::query(
-            "\n            INSERT INTO states (item_id, state, pinned, last_error)\n            VALUES (?1, ?2, ?3, ?4)\n            ON CONFLICT(item_id) DO UPDATE SET\n                state = excluded.state,\n                pinned = excluded.pinned,\n                last_error = excluded.last_error;\n            ",
+            "\n            INSERT INTO states (\n                item_id,\n                state,\n                pinned,\n                last_error,\n                retry_at,\n                last_success_at,\n                last_error_at,\n                dirty\n            )\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n            ON CONFLICT(item_id) DO UPDATE SET\n                state = excluded.state,\n                pinned = excluded.pinned,\n                last_error = excluded.last_error,\n                retry_at = excluded.retry_at,\n                last_success_at = excluded.last_success_at,\n                last_error_at = excluded.last_error_at,\n                dirty = excluded.dirty;\n            ",
         )
         .bind(item_id)
         .bind(state.as_str())
         .bind(if pinned { 1 } else { 0 })
         .bind(last_error)
+        .bind(meta.retry_at)
+        .bind(meta.last_success_at)
+        .bind(meta.last_error_at)
+        .bind(if meta.dirty { 1 } else { 0 })
         .execute(&self.pool)
         .await?;
 
@@ -252,7 +314,9 @@ impl IndexStore {
 
     pub async fn get_state(&self, item_id: i64) -> Result<Option<StateRecord>, IndexError> {
         let row =
-            sqlx::query("SELECT item_id, state, pinned, last_error FROM states WHERE item_id = ?1")
+            sqlx::query(
+                "SELECT item_id, state, pinned, last_error, retry_at, last_success_at, last_error_at, dirty FROM states WHERE item_id = ?1",
+            )
                 .bind(item_id)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -263,12 +327,17 @@ impl IndexStore {
 
         let state: String = row.try_get("state")?;
         let pinned: i64 = row.try_get("pinned")?;
+        let dirty: i64 = row.try_get("dirty")?;
 
         Ok(Some(StateRecord {
             item_id: row.try_get("item_id")?,
             state: FileState::parse(&state)?,
             pinned: pinned != 0,
             last_error: row.try_get("last_error")?,
+            retry_at: row.try_get("retry_at")?,
+            last_success_at: row.try_get("last_success_at")?,
+            last_error_at: row.try_get("last_error_at")?,
+            dirty: dirty != 0,
         }))
     }
 
@@ -315,21 +384,64 @@ impl IndexStore {
     }
 
     pub async fn enqueue_op(&self, op: &Operation) -> Result<i64, IndexError> {
-        let result = sqlx::query("INSERT INTO ops_queue (kind, path, attempt) VALUES (?1, ?2, ?3)")
+        let result = sqlx::query(
+            "INSERT INTO ops_queue (kind, path, payload, attempt, retry_at, priority) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(kind, path) DO UPDATE SET
+                payload = excluded.payload,
+                attempt = MIN(ops_queue.attempt, excluded.attempt),
+                retry_at = excluded.retry_at,
+                priority = MAX(ops_queue.priority, excluded.priority)",
+        )
             .bind(operation_kind_as_str(&op.kind))
             .bind(&op.path)
+            .bind(&op.payload)
             .bind(op.attempt)
+            .bind(op.retry_at)
+            .bind(op.priority)
             .execute(&self.pool)
             .await?;
 
         Ok(result.last_insert_rowid())
     }
 
+    pub async fn requeue_op(
+        &self,
+        op: &Operation,
+        retry_at: i64,
+        last_error: Option<&str>,
+    ) -> Result<(), IndexError> {
+        let mut op = op.clone();
+        op.attempt = op.attempt.saturating_add(1);
+        op.retry_at = Some(retry_at);
+        self.enqueue_op(&op).await?;
+        if let Some(item) = self.get_item_by_path(&op.path).await? {
+            self.set_state_with_meta(
+                item.id,
+                FileState::Error,
+                true,
+                last_error,
+                StateMeta {
+                    retry_at: Some(retry_at),
+                    last_success_at: None,
+                    last_error_at: Some(retry_at),
+                    dirty: true,
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn dequeue_op(&self) -> Result<Option<Operation>, IndexError> {
-        let row =
-            sqlx::query("SELECT id, kind, path, attempt FROM ops_queue ORDER BY id ASC LIMIT 1")
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query(
+            "SELECT id, kind, path, payload, attempt, retry_at, priority
+             FROM ops_queue
+             WHERE retry_at IS NULL OR retry_at <= CAST(strftime('%s','now') AS INTEGER)
+             ORDER BY priority DESC, id ASC
+             LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -340,7 +452,10 @@ impl IndexStore {
         let operation = Operation {
             kind: parse_operation_kind(&kind)?,
             path: row.try_get("path")?,
+            payload: row.try_get("payload")?,
             attempt: row.try_get("attempt")?,
+            retry_at: row.try_get("retry_at")?,
+            priority: row.try_get("priority")?,
         };
 
         sqlx::query("DELETE FROM ops_queue WHERE id = ?1")
@@ -392,6 +507,14 @@ impl IndexStore {
     }
 }
 
+fn default_db_path() -> Result<PathBuf, IndexError> {
+    let mut path = dirs::data_dir().ok_or(IndexError::MissingDataDir)?;
+    path.push("yadisk-gtk");
+    path.push("sync");
+    path.push("index.db");
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,12 +531,15 @@ mod tests {
         let store = make_store().await;
         let item = ItemInput {
             path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
             name: "A.txt".into(),
             item_type: ItemType::File,
             size: Some(12),
             modified: Some(1_700_000_000),
             hash: Some("hash".into()),
             resource_id: Some("id".into()),
+            last_synced_hash: Some("hash".into()),
+            last_synced_modified: Some(1_700_000_000),
         };
 
         let inserted = store.upsert_item(&item).await.unwrap();
@@ -427,12 +553,15 @@ mod tests {
         let store = make_store().await;
         let mut item = ItemInput {
             path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
             name: "A.txt".into(),
             item_type: ItemType::File,
             size: Some(12),
             modified: Some(1_700_000_000),
             hash: None,
             resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
         };
 
         store.upsert_item(&item).await.unwrap();
@@ -447,12 +576,15 @@ mod tests {
         let store = make_store().await;
         let item = ItemInput {
             path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
             name: "A.txt".into(),
             item_type: ItemType::File,
             size: Some(12),
             modified: Some(1_700_000_000),
             hash: None,
             resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
         };
 
         let inserted = store.upsert_item(&item).await.unwrap();
@@ -465,6 +597,7 @@ mod tests {
         assert_eq!(state.state, FileState::Cached);
         assert!(state.pinned);
         assert_eq!(state.last_error.as_deref(), Some("ok"));
+        assert!(!state.dirty);
 
         store.set_pinned(inserted.id, false).await.unwrap();
         let state = store.get_state(inserted.id).await.unwrap().unwrap();
@@ -489,7 +622,10 @@ mod tests {
         let op = Operation {
             kind: OperationKind::Upload,
             path: "/Docs/A.txt".into(),
+            payload: Some("{\"overwrite\":true}".into()),
             attempt: 0,
+            retry_at: None,
+            priority: 10,
         };
 
         store.enqueue_op(&op).await.unwrap();
@@ -497,6 +633,74 @@ mod tests {
 
         assert_eq!(fetched, op);
         assert!(store.dequeue_op().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn enqueue_deduplicates_by_kind_and_path() {
+        let store = make_store().await;
+        let first = Operation {
+            kind: OperationKind::Upload,
+            path: "/Docs/A.txt".into(),
+            payload: Some("{\"v\":1}".into()),
+            attempt: 2,
+            retry_at: Some(100),
+            priority: 1,
+        };
+        let second = Operation {
+            kind: OperationKind::Upload,
+            path: "/Docs/A.txt".into(),
+            payload: Some("{\"v\":2}".into()),
+            attempt: 0,
+            retry_at: None,
+            priority: 5,
+        };
+
+        store.enqueue_op(&first).await.unwrap();
+        store.enqueue_op(&second).await.unwrap();
+        let fetched = store.dequeue_op().await.unwrap().unwrap();
+
+        assert_eq!(fetched.attempt, 0);
+        assert_eq!(fetched.priority, 5);
+        assert_eq!(fetched.payload.as_deref(), Some("{\"v\":2}"));
+    }
+
+    #[tokio::test]
+    async fn requeue_increments_attempt_and_sets_retry_at() {
+        let store = make_store().await;
+        let item = ItemInput {
+            path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
+            name: "A.txt".into(),
+            item_type: ItemType::File,
+            size: Some(12),
+            modified: Some(1_700_000_000),
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        };
+        let inserted = store.upsert_item(&item).await.unwrap();
+        store
+            .set_state(inserted.id, FileState::Syncing, true, None)
+            .await
+            .unwrap();
+
+        let op = Operation {
+            kind: OperationKind::Download,
+            path: "/Docs/A.txt".into(),
+            payload: None,
+            attempt: 0,
+            retry_at: None,
+            priority: 0,
+        };
+        store.requeue_op(&op, 999, Some("transient")).await.unwrap();
+
+        let fetched = store.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(fetched.attempt, 1);
+        assert_eq!(fetched.retry_at, Some(999));
+        let state = store.get_state(inserted.id).await.unwrap().unwrap();
+        assert!(state.dirty);
+        assert_eq!(state.retry_at, Some(999));
     }
 
     #[tokio::test]

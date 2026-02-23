@@ -91,6 +91,32 @@ impl OAuthClient {
             Err(OAuthError::Api { status, body })
         }
     }
+
+    pub async fn refresh_token(
+        &self,
+        refresh_token: &str,
+        scope: Option<&str>,
+    ) -> Result<OAuthToken, OAuthError> {
+        let url = self.base_url.join("/token")?;
+        let mut form = vec![
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", &self.client_id),
+            ("client_secret", &self.client_secret),
+        ];
+        if let Some(scope) = scope {
+            form.push(("scope", scope));
+        }
+
+        let response = self.http.post(url).form(&form).send().await?;
+        if response.status().is_success() {
+            Ok(response.json::<OAuthToken>().await?)
+        } else {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(OAuthError::Api { status, body })
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

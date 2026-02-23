@@ -56,3 +56,34 @@ async fn exchange_code_posts_form_data() {
     assert_eq!(token.token_type, "bearer");
     assert_eq!(token.expires_in, Some(3600));
 }
+
+#[tokio::test]
+async fn refresh_token_posts_form_data() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains("refresh_token=refresh-1"))
+        .and(body_string_contains("client_id=client-id"))
+        .and(body_string_contains("client_secret=secret"))
+        .and(body_string_contains("scope=disk%3Aread+disk%3Awrite"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-token",
+            "token_type": "bearer",
+            "expires_in": 3600,
+            "refresh_token": "refresh-2",
+            "scope": "disk:read disk:write"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = OAuthClient::with_base_url(&server.uri(), "client-id", "secret").unwrap();
+    let token = client
+        .refresh_token("refresh-1", Some("disk:read disk:write"))
+        .await
+        .unwrap();
+
+    assert_eq!(token.access_token, "new-token");
+    assert_eq!(token.refresh_token.as_deref(), Some("refresh-2"));
+}

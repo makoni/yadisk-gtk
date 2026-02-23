@@ -15,7 +15,10 @@ pub enum OperationKind {
 pub struct Operation {
     pub kind: OperationKind,
     pub path: String,
+    pub payload: Option<String>,
     pub attempt: u32,
+    pub retry_at: Option<i64>,
+    pub priority: i32,
 }
 
 #[derive(Debug, Error)]
@@ -61,12 +64,18 @@ mod tests {
         queue.enqueue(Operation {
             kind: OperationKind::Upload,
             path: "/A".into(),
+            payload: None,
             attempt: 0,
+            retry_at: None,
+            priority: 0,
         });
         queue.enqueue(Operation {
             kind: OperationKind::Download,
             path: "/B".into(),
+            payload: None,
             attempt: 0,
+            retry_at: None,
+            priority: 0,
         });
 
         let first = queue.dequeue().unwrap();

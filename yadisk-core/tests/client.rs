@@ -1,7 +1,7 @@
 use serde_json::json;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-use yadisk_core::{OperationStatus, ResourceType, YadiskClient};
+use yadisk_core::{ApiErrorClass, OperationStatus, ResourceType, YadiskClient};
 
 #[tokio::test]
 async fn get_disk_info_includes_oauth_header() {
@@ -302,4 +302,103 @@ async fn get_operation_status_parses_response() {
         .unwrap();
 
     assert_eq!(status, OperationStatus::Success);
+}
+
+#[tokio::test]
+async fn get_resource_supports_fields_param() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs/A.txt"))
+        .and(query_param("fields", "name,path,type,md5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "path": "/Docs/A.txt",
+            "name": "A.txt",
+            "type": "file",
+            "md5": "deadbeef"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let resource = client
+        .get_resource_with_fields("/Docs/A.txt", Some(&["name", "path", "type", "md5"]))
+        .await
+        .unwrap();
+
+    assert_eq!(resource.name, "A.txt");
+    assert_eq!(resource.md5.as_deref(), Some("deadbeef"));
+}
+
+#[tokio::test]
+async fn list_directory_all_pages_to_total() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs"))
+        .and(query_param("limit", "2"))
+        .and(query_param("offset", "0"))
+        .and(query_param("fields", "name,path,type"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "_embedded": {
+                "limit": 2,
+                "offset": 0,
+                "total": 3,
+                "items": [
+                    {"path": "/Docs/A.txt", "name": "A.txt", "type": "file"},
+                    {"path": "/Docs/B.txt", "name": "B.txt", "type": "file"}
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Docs"))
+        .and(query_param("limit", "2"))
+        .and(query_param("offset", "2"))
+        .and(query_param("fields", "name,path,type"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "_embedded": {
+                "limit": 2,
+                "offset": 2,
+                "total": 3,
+                "items": [
+                    {"path": "/Docs/C.txt", "name": "C.txt", "type": "file"}
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let items = client
+        .list_directory_all("/Docs", 2, Some(&["name", "path", "type"]))
+        .await
+        .unwrap();
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[2].name, "C.txt");
+}
+
+#[tokio::test]
+async fn api_error_classification_marks_rate_limit_retryable() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/disk"))
+        .respond_with(ResponseTemplate::new(429).set_body_string("rate limit"))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let err = client
+        .get_disk_info()
+        .await
+        .expect_err("expected API error");
+    assert_eq!(err.classification(), Some(ApiErrorClass::RateLimit));
+    assert!(err.is_retryable());
 }

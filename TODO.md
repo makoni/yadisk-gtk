@@ -23,6 +23,7 @@
 - [x] Token storage: secret portal (Flatpak) + keyring fallback (classic).
 - [x] OAuth helper: authorize URL + code обмен на токен.
 - [x] OAuth flow + хранение токенов в Keyring/portal.
+- [x] Sandbox policy for secret storage: в sandbox не делать неявный fallback в keyring при недоступном portal.
 - [x] Sync engine: базовая очередь операций (TDD).
 - [x] Sync engine: стратегия разрешения конфликтов (three‑way, keep‑both).
 - [x] Sync engine: SQLite индекс (items/states).
@@ -39,6 +40,13 @@
 - [x] Sync engine: execute download/upload ops and mark cached.
 - [x] Sync engine: operation polling helper (wait with backoff).
 - [x] Sync engine: conflicts persistence (record/list).
+- [x] OAuth storage: full OAuth state JSON (`access/refresh/expires/scope/type`) + legacy plain-token migration.
+- [x] OAuth client: refresh-token flow + tests.
+- [x] Yadisk client: `fields=` support + `list_directory_all`.
+- [x] Yadisk API errors: typed classification (auth/rate-limit/transient/permanent).
+- [x] Transfer client: atomic download, streaming upload/download, md5 check, concurrency limits.
+- [x] SQLite index: `parent_path`, expanded sync-state fields, baseline fields, default XDG data DB path helper.
+- [x] Ops queue: payload JSON, scheduling (`attempt/retry_at/priority`), dedupe/coalescing, requeue helper.
 
 ---
 
@@ -57,42 +65,40 @@
 - [ ] Для A2: определить UX (что именно пользователь видит в Files и что только в приложении).
 
 ### B) OAuth и токены (production-ready)
-- [ ] Перейти от хранения `access_token`-строки к хранению полного OAuth-состояния:
-  - [ ] `access_token`, `refresh_token`, `expires_at`, `scope`, `token_type`.
-  - [ ] Сериализация в JSON и хранение через текущий `TokenStorage` (portal/keyring).
-  - [ ] Миграция старого формата токена (plain string) в новый.
-- [ ] Добавить refresh-token flow в `yadisk-core::OAuthClient` + wiremock tests.
+- [x] Перейти от хранения `access_token`-строки к хранению полного OAuth-состояния:
+  - [x] `access_token`, `refresh_token`, `expires_at`, `scope`, `token_type`.
+  - [x] Сериализация в JSON и хранение через текущий `TokenStorage` (portal/keyring).
+  - [x] Миграция старого формата токена (plain string) в новый.
+- [x] Добавить refresh-token flow в `yadisk-core::OAuthClient` + wiremock tests.
 - [ ] В daemon добавить token provider:
   - [ ] выдача валидного access token с auto-refresh.
   - [ ] retry одного запроса после refresh на `401`.
-- [ ] Уточнить поведение fallback в sandbox:
-  - [ ] не уходить бесконтрольно в keyring path при отсутствии portal в strict окружении.
 
 ### C) `yadisk-core`: довести API слой до нужд синка
-- [ ] Реализовать удобный paging helper (`list_directory_all`) до `total`.
-- [ ] Добавить `fields=` поддержку для тяжелых запросов (снижение payload).
+- [x] Реализовать удобный paging helper (`list_directory_all`) до `total`.
+- [x] Добавить `fields=` поддержку для тяжелых запросов (снижение payload).
 - [ ] Добавить endpoint(ы)/стратегию инкрементальных изменений (cursor/token или polling+diff) и покрыть тестами.
-- [ ] Типизировать классы API-ошибок для retry policy (auth/rate-limit/transient/permanent).
+- [x] Типизировать классы API-ошибок для retry policy (auth/rate-limit/transient/permanent).
 
 ### D) Transfer слой (большие файлы, атомарность, контроль целостности)
-- [ ] Download делать атомарно: `*.partial` + rename по завершению.
-- [ ] Upload/Download перевести на streaming (без чтения всего файла в память).
-- [ ] Проверка целостности после download (md5, где доступно в metadata).
-- [ ] Лимиты параллелизма upload/download + конфиг.
+- [x] Download делать атомарно: `*.partial` + rename по завершению.
+- [x] Upload/Download перевести на streaming (без чтения всего файла в память).
+- [x] Проверка целостности после download (md5, где доступно в metadata).
+- [x] Лимиты параллелизма upload/download + конфиг.
 
 ### E) SQLite индекс и миграции
 - [ ] Перевести схему на `sqlx` migrations (`migrations/`) вместо hardcoded SQL.
-- [ ] Добавить поля для полноценного sync-state:
-  - [ ] `retry_at`, `last_success_at`, `last_error_at`, `dirty`.
-  - [ ] baseline-поля для three-way конфликтов (`last_synced_hash` / `last_synced_modified`).
-- [ ] Добавить parent relation (`parent_path` или `parent_id`) для дерева и ускорения readdir.
-- [ ] Зафиксировать реальный путь БД (XDG data dir) и инициализацию директорий.
+- [x] Добавить поля для полноценного sync-state:
+  - [x] `retry_at`, `last_success_at`, `last_error_at`, `dirty`.
+  - [x] baseline-поля для three-way конфликтов (`last_synced_hash` / `last_synced_modified`).
+- [x] Добавить parent relation (`parent_path` или `parent_id`) для дерева и ускорения readdir.
+- [x] Зафиксировать реальный путь БД (XDG data dir) и инициализацию директорий.
 
 ### F) Ops queue: payload, retries, дедупликация
-- [ ] Расширить `ops_queue` payload (JSON) для move/rename/copy/delete параметров.
-- [ ] Добавить scheduling: `attempt`, `retry_at`, `priority`.
-- [ ] Реализовать requeue с backoff и классификацией ошибок (transient/permanent).
-- [ ] Добавить дедупликацию/coalescing операций по path/item.
+- [x] Расширить `ops_queue` payload (JSON) для move/rename/copy/delete параметров.
+- [x] Добавить scheduling: `attempt`, `retry_at`, `priority`.
+- [x] Реализовать requeue с backoff и классификацией ошибок (transient/permanent).
+- [x] Добавить дедупликацию/coalescing операций по path/item.
 
 ### G) `SyncEngine`: довести до полного двустороннего цикла
 - [ ] Cloud→Local:
@@ -123,13 +129,17 @@
 - [ ] Интеграционные FUSE-тесты (gated в CI).
 
 ### J) GNOME интеграция (Nautilus + libcloudproviders)
+- [ ] Зафиксировать host-side модель интеграции для Files (вариант A1): extension/provider ставятся в host и работают с `yadiskd` по D-Bus.
 - [ ] Nautilus extension:
+  - [ ] MVP-скелет extension (info provider + menu provider) и подключение к D-Bus API демона.
   - [ ] эмблемы cloud/offline/syncing/error.
+  - [ ] Для MVP использовать стандартные Adwaita symbolic icons (без собственного icon theme/asset pack).
   - [ ] контекстные действия Download/Pin/Evict/Retry.
   - [ ] подписка на D-Bus сигналы для live updates.
 - [ ] libcloudproviders provider:
   - [ ] экспорт account/provider в sidebar Files.
   - [ ] привязка к локальной sync точке и статусам.
+  - [ ] синхронизация account health/state c `yadiskd` (online/offline/error).
 
 ### K) Service management и packaging
 - [ ] systemd --user units:
@@ -279,10 +289,10 @@
 - `error`: ошибка синка.
 
 **Эмблемы (Nautilus):**
-- cloud_only → «cloud» эмблема.
-- cached → «check»/«offline» эмблема.
-- syncing → «sync» эмблема.
-- error → «error» эмблема.
+- cloud_only → стандартная cloud‑эмблема Adwaita.
+- cached → стандартная check/offline‑эмблема Adwaita.
+- syncing → стандартная sync‑эмблема Adwaita.
+- error → стандартная error‑эмблема Adwaita.
 
 **Контекстные действия:**
 - «Скачать» → enqueue download + pin.
@@ -361,7 +371,7 @@
 
 ## 11) Безопасность
 
-- Хранить токены только в GNOME Keyring (libsecret).
+- Хранить токены через `TokenStorage`: Secret portal (предпочтительно в sandbox) + keyring fallback вне strict sandbox.
 - Не писать токены в логи.
 - TLS‑валидация по умолчанию.
 
@@ -376,7 +386,7 @@
 - `xattr` (extended attributes)
 - `zbus` (DBus)
 - `glib`, `gio` (для GNOME интеграции)
-- `libsecret` bindings (токены)
+- `ashpd` (OpenURI/Secret portal), `keyring` (fallback storage)
 
 ---
 

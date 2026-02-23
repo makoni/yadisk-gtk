@@ -17,6 +17,14 @@ pub enum YadiskError {
     MissingEmbedded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiErrorClass {
+    Auth,
+    RateLimit,
+    Transient,
+    Permanent,
+}
+
 #[derive(Clone)]
 pub struct YadiskClient {
     http: Client,
@@ -49,8 +57,22 @@ impl YadiskClient {
     }
 
     pub async fn get_resource(&self, path: &str) -> Result<Resource, YadiskError> {
+        self.get_resource_with_fields(path, None).await
+    }
+
+    pub async fn get_resource_with_fields(
+        &self,
+        path: &str,
+        fields: Option<&[&str]>,
+    ) -> Result<Resource, YadiskError> {
         let mut url = self.endpoint("/v1/disk/resources")?;
-        url.query_pairs_mut().append_pair("path", path);
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("path", path);
+            if let Some(fields) = fields.filter(|f| !f.is_empty()) {
+                query.append_pair("fields", &fields.join(","));
+            }
+        }
         let response = self
             .http
             .get(url)
@@ -158,6 +180,17 @@ impl YadiskClient {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<ResourceList, YadiskError> {
+        self.list_directory_with_fields(path, limit, offset, None)
+            .await
+    }
+
+    pub async fn list_directory_with_fields(
+        &self,
+        path: &str,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        fields: Option<&[&str]>,
+    ) -> Result<ResourceList, YadiskError> {
         let mut url = self.endpoint("/v1/disk/resources")?;
         {
             let mut query = url.query_pairs_mut();
@@ -168,6 +201,9 @@ impl YadiskClient {
             if let Some(offset) = offset {
                 query.append_pair("offset", &offset.to_string());
             }
+            if let Some(fields) = fields.filter(|f| !f.is_empty()) {
+                query.append_pair("fields", &fields.join(","));
+            }
         }
         let response = self
             .http
@@ -177,6 +213,29 @@ impl YadiskClient {
             .await?;
         let payload: ResourceListResponse = Self::handle_response(response).await?;
         payload.embedded.ok_or(YadiskError::MissingEmbedded)
+    }
+
+    pub async fn list_directory_all(
+        &self,
+        path: &str,
+        page_size: u32,
+        fields: Option<&[&str]>,
+    ) -> Result<Vec<Resource>, YadiskError> {
+        let page_size = page_size.max(1);
+        let mut offset = 0u32;
+        let mut items = Vec::new();
+        loop {
+            let page = self
+                .list_directory_with_fields(path, Some(page_size), Some(offset), fields)
+                .await?;
+            offset = offset.saturating_add(page.items.len() as u32);
+            let total = page.total;
+            items.extend(page.items);
+            if offset >= total {
+                break;
+            }
+        }
+        Ok(items)
     }
 
     pub async fn get_download_link(&self, path: &str) -> Result<TransferLink, YadiskError> {
@@ -227,6 +286,39 @@ impl YadiskClient {
             let body = response.text().await.unwrap_or_default();
             Err(YadiskError::Api { status, body })
         }
+    }
+}
+
+impl YadiskError {
+    pub fn classification(&self) -> Option<ApiErrorClass> {
+        match self {
+            YadiskError::Api { status, .. } => Some(classify_api_status(*status)),
+            _ => None,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.classification(),
+            Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)
+        )
+    }
+}
+
+fn classify_api_status(status: StatusCode) -> ApiErrorClass {
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        ApiErrorClass::Auth
+    } else if status == StatusCode::TOO_MANY_REQUESTS {
+        ApiErrorClass::RateLimit
+    } else if status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::CONFLICT | StatusCode::TOO_EARLY
+        )
+    {
+        ApiErrorClass::Transient
+    } else {
+        ApiErrorClass::Permanent
     }
 }
 

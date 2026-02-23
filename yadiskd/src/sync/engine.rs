@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use yadisk_core::{OperationStatus, ResourceType, YadiskClient};
+use yadisk_core::{ApiErrorClass, OperationStatus, ResourceType, YadiskClient};
 
 use super::backoff::Backoff;
-use super::index::{FileState, IndexError, IndexStore, ItemInput, ItemType};
+use super::index::{FileState, IndexError, IndexStore, ItemInput, ItemType, StateMeta};
 use super::paths::{PathError, cache_path_for};
 use super::queue::{Operation, OperationKind};
 use super::transfer::{TransferClient, TransferError};
@@ -60,10 +60,26 @@ impl SyncEngine {
     }
 
     pub async fn sync_directory_once(&self, path: &str) -> Result<usize, EngineError> {
-        let list = self.client.list_directory(path, Some(100), Some(0)).await?;
-        for item in &list.items {
+        let list = self
+            .client
+            .list_directory_all(
+                path,
+                100,
+                Some(&[
+                    "path",
+                    "name",
+                    "type",
+                    "size",
+                    "modified",
+                    "md5",
+                    "resource_id",
+                ]),
+            )
+            .await?;
+        for item in &list {
             let input = ItemInput {
                 path: item.path.clone(),
+                parent_path: parent_path(&item.path),
                 name: item.name.clone(),
                 item_type: match item.resource_type {
                     ResourceType::File => ItemType::File,
@@ -71,8 +87,10 @@ impl SyncEngine {
                 },
                 size: item.size.map(|v| v as i64),
                 modified: parse_modified(item.modified.as_deref())?,
-                hash: None,
-                resource_id: None,
+                hash: item.md5.clone(),
+                resource_id: item.resource_id.clone(),
+                last_synced_hash: None,
+                last_synced_modified: None,
             };
             let record = self.index.upsert_item(&input).await?;
 
@@ -85,7 +103,7 @@ impl SyncEngine {
             }
         }
 
-        Ok(list.items.len())
+        Ok(list.len())
     }
 
     pub async fn enqueue_download(&self, path: &str) -> Result<i64, EngineError> {
@@ -102,7 +120,10 @@ impl SyncEngine {
             .enqueue_op(&Operation {
                 kind: OperationKind::Download,
                 path: path.to_string(),
+                payload: None,
                 attempt: 0,
+                retry_at: None,
+                priority: 50,
             })
             .await?)
     }
@@ -121,7 +142,10 @@ impl SyncEngine {
             .enqueue_op(&Operation {
                 kind: OperationKind::Upload,
                 path: path.to_string(),
+                payload: None,
                 attempt: 0,
+                retry_at: None,
+                priority: 50,
             })
             .await?)
     }
@@ -131,37 +155,62 @@ impl SyncEngine {
             return Ok(false);
         };
 
-        match op.kind {
-            OperationKind::Download => self.execute_download(&op.path).await?,
-            OperationKind::Upload => self.execute_upload(&op.path).await?,
+        let result = match op.kind.clone() {
+            OperationKind::Download => self.execute_download(&op.path).await,
+            OperationKind::Upload => self.execute_upload(&op.path).await,
             OperationKind::Delete => {
                 let link = self.client.delete_resource(&op.path, true).await?;
                 if let Some(link) = link {
                     self.wait_for_operation(link.href.as_str()).await?;
                 }
+                Ok(())
             }
             OperationKind::Move => {
                 // Move needs both source/destination; not wired yet in Operation payload.
+                Ok(())
             }
+        };
+
+        if let Err(err) = result {
+            if is_transient_error(&err) {
+                let retry_after =
+                    now_unix().saturating_add(self.backoff.delay(op.attempt + 1).as_secs() as i64);
+                self.index
+                    .requeue_op(&op, retry_after, Some(&err.to_string()))
+                    .await?;
+                return Ok(true);
+            }
+            return Err(err);
         }
 
         Ok(true)
     }
 
     async fn execute_download(&self, path: &str) -> Result<(), EngineError> {
-        let link = self.client.get_download_link(path).await?;
-        let target = cache_path_for(&self.cache_root, path)?;
-        self.transfer
-            .download_to_path(link.href.as_str(), &target)
-            .await?;
-
         let item = self
             .index
             .get_item_by_path(path)
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+        let link = self.client.get_download_link(path).await?;
+        let target = cache_path_for(&self.cache_root, path)?;
+        self.transfer
+            .download_to_path_checked(link.href.as_str(), &target, item.hash.as_deref())
+            .await?;
+
         self.index
-            .set_state(item.id, FileState::Cached, true, None)
+            .set_state_with_meta(
+                item.id,
+                FileState::Cached,
+                true,
+                None,
+                StateMeta {
+                    retry_at: None,
+                    last_success_at: Some(now_unix()),
+                    last_error_at: None,
+                    dirty: false,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -179,7 +228,18 @@ impl SyncEngine {
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
         self.index
-            .set_state(item.id, FileState::Cached, true, None)
+            .set_state_with_meta(
+                item.id,
+                FileState::Cached,
+                true,
+                None,
+                StateMeta {
+                    retry_at: None,
+                    last_success_at: Some(now_unix()),
+                    last_error_at: None,
+                    dirty: false,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -206,6 +266,39 @@ fn parse_modified(value: Option<&str>) -> Result<Option<i64>, time::error::Parse
     Ok(Some(parsed.unix_timestamp()))
 }
 
+fn parent_path(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    trimmed.rfind('/').map(|idx| {
+        if idx == 0 {
+            "/".to_string()
+        } else {
+            trimmed[..idx].to_string()
+        }
+    })
+}
+
+fn now_unix() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn is_transient_error(err: &EngineError) -> bool {
+    match err {
+        EngineError::Api(api) => matches!(
+            api.classification(),
+            Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)
+        ),
+        EngineError::Transfer(TransferError::Request(_))
+        | EngineError::Transfer(TransferError::Io(_))
+        | EngineError::Transfer(TransferError::ConcurrencyClosed)
+        | EngineError::OperationFailed => true,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +322,12 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/disk/resources"))
             .and(query_param("path", "/Docs"))
+            .and(query_param("limit", "100"))
+            .and(query_param("offset", "0"))
+            .and(query_param(
+                "fields",
+                "path,name,type,size,modified,md5,resource_id",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "_embedded": {
                     "limit": 100,
@@ -292,12 +391,15 @@ mod tests {
             .index
             .upsert_item(&ItemInput {
                 path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
                 name: "A.txt".into(),
                 item_type: ItemType::File,
                 size: Some(5),
                 modified: None,
                 hash: None,
                 resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
             })
             .await
             .unwrap();
@@ -348,12 +450,15 @@ mod tests {
             .index
             .upsert_item(&ItemInput {
                 path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
                 name: "A.txt".into(),
                 item_type: ItemType::File,
                 size: Some(7),
                 modified: None,
                 hash: None,
                 resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
             })
             .await
             .unwrap();

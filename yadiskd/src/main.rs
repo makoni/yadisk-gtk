@@ -4,7 +4,7 @@ mod sync;
 
 use anyhow::Context;
 use oauth_flow::OAuthFlow;
-use storage::TokenStorage;
+use storage::{OAuthState, TokenStorage};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,10 +23,11 @@ async fn main() -> anyhow::Result<()> {
                         .context("YADISK_CLIENT_SECRET is not set")?;
                     let flow = OAuthFlow::new(client_id, client_secret);
                     let token = flow.authenticate().await?;
+                    let state = OAuthState::from_oauth_token(&token);
                     storage
-                        .save_token(&token.access_token)
+                        .save_oauth_state(&state)
                         .context("failed to save token")?;
-                    token.access_token
+                    state.access_token
                 }
             }
         }
