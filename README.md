@@ -107,6 +107,80 @@ For custom/non-standard extension path, set:
 export YADISK_NAUTILUS_EXT_DIR=/path/to/nautilus/extensions-4
 ```
 
+## On-demand open by double click (FUSE mode)
+
+Чтобы double click сразу открывал реальный контент (а не 0-byte placeholder), используйте FUSE mount:
+
+```bash
+# 1) host deps
+sudo apt install -y fuse3 libfuse3-dev
+
+# 2) install fuse helper
+bash packaging/host/install-yadisk-fuse.sh
+
+# 3) run mount
+~/.local/bin/yadisk-fuse --mount "$HOME/Yandex Disk"
+```
+
+В этом режиме чтение файла из Nautilus автоматически триггерит `Download(...)` через D-Bus и ждёт появления файла в кэше.
+Если при сборке видите `fuse3.pc ... not found`, установите `libfuse3-dev` (и `pkg-config`), затем повторите скрипт.
+
+## Локальное e2e тестирование (daemon + Nautilus + FUSE)
+
+```bash
+# 0) зависимости для host integration
+sudo apt install -y libnautilus-extension-dev fuse3 libfuse3-dev pkg-config
+
+# 1) проверка workspace
+cargo fmt --all
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+# 2) запуск демона (выберите один вариант auth)
+YADISK_TOKEN=<token> cargo run -p yadiskd
+# или:
+export YADISK_CLIENT_ID=<client_id>
+export YADISK_CLIENT_SECRET=<client_secret>
+cargo run -p yadiskd
+```
+
+В отдельном терминале:
+
+```bash
+# 3) установка/обновление Nautilus extension
+bash packaging/host/install-nautilus-extension.sh
+
+# 4) перезагрузка Nautilus для подхвата новой .so
+nautilus -q
+nautilus "$HOME/Yandex Disk"
+
+# 5) smoke-проверка расширения и D-Bus
+bash packaging/host/nautilus-extension-smoke.sh
+```
+
+Для double click on-demand download через FUSE:
+
+```bash
+# 6) установка/обновление FUSE helper
+bash packaging/host/install-yadisk-fuse.sh
+
+# 7) запуск mount (держите процесс запущенным)
+~/.local/bin/yadisk-fuse --mount "$HOME/Yandex Disk"
+```
+
+Проверки в Nautilus:
+- контекстное меню: `Save Offline`, `Download Now`, `Remove Offline Copy`, `Retry Sync`
+- эмблемы состояния (монохромные symbolic)
+- после `Save Offline` размер файла становится реальным
+- в FUSE-режиме double click открывает реальный контент (а не 0-byte placeholder)
+
+Быстрый dev-цикл после изменений extension:
+
+```bash
+bash packaging/host/install-nautilus-extension.sh && nautilus -q
+```
+
 ## Flatpak Integration
 
 The project follows Flatpak-first approach:

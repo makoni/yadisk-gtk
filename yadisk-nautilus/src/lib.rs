@@ -404,7 +404,7 @@ mod nautilus_plugin {
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_int};
     use std::ptr;
-    use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Mutex, Once, OnceLock, RwLock};
     use std::thread;
 
@@ -518,7 +518,6 @@ mod nautilus_plugin {
             icon: *const c_char,
         ) -> *mut NautilusMenuItem;
         fn nautilus_menu_item_set_submenu(item: *mut NautilusMenuItem, menu: *mut NautilusMenu);
-        fn nautilus_menu_provider_emit_items_updated_signal(provider: *mut NautilusMenuProvider);
     }
 
     #[derive(Clone)]
@@ -535,7 +534,6 @@ mod nautilus_plugin {
     static SIGNAL_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
     static REGISTERED_TYPE: AtomicUsize = AtomicUsize::new(0);
     static REGISTERED_TYPES: OnceLock<[GType; 1]> = OnceLock::new();
-    static LAST_MENU_PROVIDER: AtomicPtr<NautilusMenuProvider> = AtomicPtr::new(ptr::null_mut());
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn nautilus_module_initialize(module: *mut GTypeModule) {
@@ -679,10 +677,12 @@ mod nautilus_plugin {
     }
 
     unsafe extern "C" fn menu_provider_get_file_items(
-        provider: *mut NautilusMenuProvider,
+        _provider: *mut NautilusMenuProvider,
         files: *mut GList,
     ) -> *mut GList {
-        LAST_MENU_PROVIDER.store(provider, Ordering::SeqCst);
+        if let Ok(mut contexts) = action_contexts().lock() {
+            contexts.clear();
+        }
 
         let local_paths = file_infos_to_local_paths(files);
         if local_paths.is_empty() {
@@ -944,13 +944,6 @@ mod nautilus_plugin {
                             cache_state(&path, state);
                             let local_path = map_remote_to_local_path(&path, sync_root());
                             invalidate_file_info_for_local_path(&local_path);
-
-                            let provider = LAST_MENU_PROVIDER.load(Ordering::SeqCst);
-                            if !provider.is_null() {
-                                unsafe {
-                                    nautilus_menu_provider_emit_items_updated_signal(provider);
-                                }
-                            }
                         }
                         SyncSignalEvent::ConflictAdded { .. } => {}
                     }

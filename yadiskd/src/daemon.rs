@@ -168,7 +168,12 @@ impl DaemonRuntime {
         let materialize_remote_root = self.config.remote_root.clone();
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
+            let mut materialize_enabled = true;
             loop {
+                if !materialize_enabled {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
                 match materialize_sync_tree(
                     &engine_for_materialize,
                     &materialize_sync_root,
@@ -182,7 +187,16 @@ impl DaemonRuntime {
                         initial_logged = true;
                     }
                     Ok(_) => {}
-                    Err(err) => eprintln!("[yadiskd] materialize error: {err}"),
+                    Err(err) => {
+                        if error_contains_enosys(&err) {
+                            eprintln!(
+                                "[yadiskd] materialization disabled: filesystem does not support required write operations"
+                            );
+                            materialize_enabled = false;
+                        } else {
+                            eprintln!("[yadiskd] materialize error: {err}");
+                        }
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -442,8 +456,11 @@ async fn materialize_sync_tree(
         if matches!(state, Some(FileState::Cached)) {
             let cache_path = crate::sync::paths::cache_path_for(cache_root, &item.path)?;
             if tokio::fs::try_exists(&cache_path).await? {
-                tokio::fs::copy(&cache_path, &local_path).await?;
-                continue;
+                match tokio::fs::copy(&cache_path, &local_path).await {
+                    Ok(_) => continue,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
             }
         }
 
@@ -486,6 +503,15 @@ fn state_for_path(states: &HashMap<String, FileState>, path: &str) -> Option<Fil
         return states.get(&disk).cloned();
     }
     None
+}
+
+fn error_contains_enosys(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+            == Some(38)
+    })
 }
 
 fn sync_path_for(sync_root: &Path, remote_path: &str) -> anyhow::Result<PathBuf> {
@@ -587,6 +613,12 @@ mod tests {
     #[test]
     fn local_watcher_is_disabled_by_default() {
         assert!(!read_bool_env("NO_SUCH_BOOL_ENV_FOR_TEST", false));
+    }
+
+    #[test]
+    fn detects_enosys_in_error_chain() {
+        let err = anyhow::Error::new(std::io::Error::from_raw_os_error(38));
+        assert!(error_contains_enosys(&err));
     }
 
     #[tokio::test]
