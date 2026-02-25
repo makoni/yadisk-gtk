@@ -114,6 +114,102 @@
     }
 
     #[tokio::test]
+    async fn run_once_upload_rejects_files_over_dynamic_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_space": 1024,
+                "used_space": 1,
+                "is_paid": false,
+                "max_file_size": 3
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/Large.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "Large.txt".into(),
+                item_type: ItemType::File,
+                size: Some(10),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let source = cache_path_for(dir.path(), "/Docs/Large.txt").unwrap();
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"0123456789").await.unwrap();
+        engine.enqueue_upload("/Docs/Large.txt").await.unwrap();
+
+        let err = engine
+            .run_once()
+            .await
+            .expect_err("expected upload size validation error");
+        assert!(matches!(err, EngineError::UploadTooLarge { .. }));
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/Large.txt")
+            .await
+            .unwrap()
+            .unwrap();
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        assert_eq!(state.state, FileState::Error);
+    }
+
+    #[tokio::test]
+    async fn run_once_uses_retry_after_header_for_requeue() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/download"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "2")
+                    .set_body_string("rate limited"),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let item = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine.enqueue_download("/Docs/A.txt").await.unwrap();
+        let before = now_unix();
+
+        assert!(engine.run_once().await.unwrap());
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        let retry_at = state.retry_at.expect("expected retry_at");
+        assert!(retry_at >= before + 2);
+        assert!(retry_at <= before + 6);
+    }
+
+    #[tokio::test]
     async fn run_once_does_not_requeue_permanent_errors() {
         let server = MockServer::start().await;
         let dir = tempdir().unwrap();

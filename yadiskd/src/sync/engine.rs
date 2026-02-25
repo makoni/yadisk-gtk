@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use md5::Context;
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 use yadisk_core::{ApiErrorClass, OperationStatus, ResourceType, YadiskClient};
 
 use super::backoff::Backoff;
@@ -39,6 +42,8 @@ pub enum EngineError {
     MissingItem(String),
     #[error("operation failed")]
     OperationFailed,
+    #[error("upload size {size} exceeds server limit {max_size}")]
+    UploadTooLarge { size: u64, max_size: u64 },
 }
 
 pub struct SyncEngine {
@@ -47,9 +52,13 @@ pub struct SyncEngine {
     transfer: TransferClient,
     cache_root: PathBuf,
     backoff: Backoff,
+    active_transfers: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    upload_limit_cache: Arc<Mutex<UploadLimitCache>>,
 }
 
 const MAX_RETRY_ATTEMPTS: u32 = 5;
+const UPLOAD_LIMIT_CACHE_TTL: Duration = Duration::from_secs(300);
+type UploadLimitCache = Option<(Option<u64>, Instant)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathDisplayState {
@@ -111,12 +120,105 @@ impl SyncEngine {
                 std::time::Duration::from_secs(10),
                 true,
             ),
+            active_transfers: Arc::new(Mutex::new(HashMap::new())),
+            upload_limit_cache: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn with_transfer(mut self, transfer: TransferClient) -> Self {
         self.transfer = transfer;
         self
+    }
+
+    pub fn cancel_transfer(&self, path: &str) {
+        let mut map = self
+            .active_transfers
+            .lock()
+            .expect("transfer mutex poisoned");
+        for key in path_variants(path) {
+            if let Some(token) = map.remove(&key) {
+                token.cancel();
+            }
+        }
+    }
+
+    pub fn cancel_all_transfers(&self) {
+        let mut map = self
+            .active_transfers
+            .lock()
+            .expect("transfer mutex poisoned");
+        for (_, token) in map.drain() {
+            token.cancel();
+        }
+    }
+
+    pub async fn has_active_or_queued_work(&self) -> Result<bool, EngineError> {
+        if !self
+            .active_transfers
+            .lock()
+            .expect("transfer mutex poisoned")
+            .is_empty()
+        {
+            return Ok(true);
+        }
+        Ok(self.index.has_ready_op().await?)
+    }
+
+    fn register_transfer_token(&self, path: &str) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut map = self
+            .active_transfers
+            .lock()
+            .expect("transfer mutex poisoned");
+        for key in path_variants(path) {
+            map.insert(key, token.clone());
+        }
+        token
+    }
+
+    fn unregister_transfer_token(&self, path: &str) {
+        let mut map = self
+            .active_transfers
+            .lock()
+            .expect("transfer mutex poisoned");
+        for key in path_variants(path) {
+            map.remove(&key);
+        }
+    }
+
+    async fn max_upload_size(&self) -> Option<u64> {
+        let cached_entry = *self
+            .upload_limit_cache
+            .lock()
+            .expect("upload limit mutex poisoned");
+        if let Some((cached, fetched_at)) = cached_entry
+            && fetched_at.elapsed() < UPLOAD_LIMIT_CACHE_TTL
+        {
+            return cached;
+        }
+
+        match self.client.get_disk_info().await {
+            Ok(info) => {
+                let value = info.max_file_size;
+                *self
+                    .upload_limit_cache
+                    .lock()
+                    .expect("upload limit mutex poisoned") = Some((value, Instant::now()));
+                value
+            }
+            Err(_) => (*self
+                .upload_limit_cache
+                .lock()
+                .expect("upload limit mutex poisoned"))
+            .and_then(|(value, _)| value),
+        }
+    }
+
+    fn refresh_upload_limit_cache(&self) {
+        *self
+            .upload_limit_cache
+            .lock()
+            .expect("upload limit mutex poisoned") = None;
     }
 }
 
@@ -165,8 +267,32 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+fn path_variants(path: &str) -> [String; 2] {
+    if let Some(rest) = path.strip_prefix("disk:/") {
+        let slash = format!("/{}", rest.trim_start_matches('/'));
+        return [path.to_string(), slash];
+    }
+    if let Some(rest) = path.strip_prefix('/') {
+        let disk = if rest.is_empty() {
+            "disk:/".to_string()
+        } else {
+            format!("disk:/{}", rest)
+        };
+        return [path.to_string(), disk];
+    }
+    [path.to_string(), path.to_string()]
+}
+
 fn is_transient_error(err: &EngineError) -> bool {
     match err {
+        EngineError::Api(yadisk_core::YadiskError::Api { status, .. })
+            if matches!(
+                *status,
+                reqwest::StatusCode::PAYLOAD_TOO_LARGE | reqwest::StatusCode::INSUFFICIENT_STORAGE
+            ) =>
+        {
+            false
+        }
         EngineError::Api(api) => matches!(
             api.classification(),
             Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)

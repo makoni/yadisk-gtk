@@ -124,9 +124,9 @@ pub fn visible_actions_for_state(state: SyncUiState) -> Vec<NautilusAction> {
                 NautilusAction::RemoveOfflineCopy,
             ]
         }
-        SyncUiState::Cached => vec![NautilusAction::RemoveOfflineCopy, NautilusAction::RetrySync],
-        SyncUiState::Syncing => vec![NautilusAction::RetrySync],
-        SyncUiState::Error => vec![NautilusAction::RetrySync, NautilusAction::DownloadNow],
+        SyncUiState::Cached => vec![NautilusAction::RemoveOfflineCopy],
+        SyncUiState::Syncing => Vec::new(),
+        SyncUiState::Error => vec![NautilusAction::DownloadNow],
     }
 }
 

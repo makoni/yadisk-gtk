@@ -107,8 +107,7 @@ What it provides in Files (Nautilus):
   - `Save Offline`
   - `Download Now`
   - `Remove Offline Copy`
-  - `Retry Sync`
-- D-Bus actions via `me.spaceinbox.yadisk.Sync1` (`Pin`, `Download`, `Evict`, `Retry`)
+- D-Bus actions via `me.spaceinbox.yadisk.Sync1` (`Pin`, `Download`, `Evict`)
 - live status refresh from daemon signals
 
 Optional smoke check:
@@ -190,7 +189,7 @@ bash packaging/host/install-yadisk-fuse.sh
 ```
 
 Проверки в Nautilus:
-- контекстное меню: `Save Offline`, `Download Now`, `Remove Offline Copy`, `Retry Sync`
+- контекстное меню: `Save Offline`, `Download Now`, `Remove Offline Copy`
 - эмблемы состояния (монохромные symbolic)
 - после `Save Offline` размер файла становится реальным
 - в FUSE-режиме double click открывает реальный контент (а не 0-byte placeholder)

@@ -12,7 +12,11 @@ pub enum YadiskError {
     #[error("invalid url: {0}")]
     Url(#[from] url::ParseError),
     #[error("api returned {status}: {body}")]
-    Api { status: StatusCode, body: String },
+    Api {
+        status: StatusCode,
+        body: String,
+        retry_after: Option<u64>,
+    },
     #[error("api response missing embedded items")]
     MissingEmbedded,
 }
@@ -283,8 +287,13 @@ impl YadiskClient {
             Ok(response.json::<T>().await?)
         } else {
             let status = response.status();
+            let retry_after = parse_retry_after_seconds(response.headers());
             let body = response.text().await.unwrap_or_default();
-            Err(YadiskError::Api { status, body })
+            Err(YadiskError::Api {
+                status,
+                body,
+                retry_after,
+            })
         }
     }
 }
@@ -303,6 +312,13 @@ impl YadiskError {
             Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)
         )
     }
+
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            YadiskError::Api { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 fn classify_api_status(status: StatusCode) -> ApiErrorClass {
@@ -310,6 +326,11 @@ fn classify_api_status(status: StatusCode) -> ApiErrorClass {
         ApiErrorClass::Auth
     } else if status == StatusCode::TOO_MANY_REQUESTS {
         ApiErrorClass::RateLimit
+    } else if matches!(
+        status,
+        StatusCode::PAYLOAD_TOO_LARGE | StatusCode::INSUFFICIENT_STORAGE
+    ) {
+        ApiErrorClass::Permanent
     } else if status.is_server_error()
         || matches!(
             status,
@@ -330,6 +351,18 @@ pub struct DiskInfo {
     pub trash_size: u64,
     #[serde(default)]
     pub is_paid: bool,
+    #[serde(default)]
+    pub max_file_size: Option<u64>,
+}
+
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 #[derive(Debug, Deserialize, Serialize)]

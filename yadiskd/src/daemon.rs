@@ -143,8 +143,17 @@ impl DaemonRuntime {
                 }
             })
         });
-        let _ = tray_state_tx.send(TraySyncState::Syncing);
+        let _ = tray_state_tx.send(TraySyncState::Normal);
         let local_events_enabled = Arc::new(AtomicBool::new(false));
+        let sync_root_available = Arc::new(AtomicBool::new(
+            is_sync_root_available(&self.config.sync_root).await,
+        ));
+        if !sync_root_available.load(Ordering::SeqCst) {
+            eprintln!(
+                "[yadiskd] sync root is unavailable: {}",
+                self.config.sync_root.display()
+            );
+        }
 
         let (watcher, mut local_rx): (
             Option<notify::RecommendedWatcher>,
@@ -165,8 +174,13 @@ impl DaemonRuntime {
         let remote_root = self.config.remote_root.clone();
         let cloud_poll_interval = self.config.cloud_poll_interval;
         let tray_state_tx_cloud = tray_state_tx.clone();
+        let sync_root_available_cloud = Arc::clone(&sync_root_available);
         let cloud_handle = tokio::spawn(async move {
             loop {
+                if !sync_root_available_cloud.load(Ordering::SeqCst) {
+                    tokio::time::sleep(cloud_poll_interval).await;
+                    continue;
+                }
                 match engine_for_cloud
                     .sync_directory_incremental(&remote_root)
                     .await
@@ -191,8 +205,13 @@ impl DaemonRuntime {
         let engine_for_worker = Arc::clone(&self.engine);
         let worker_interval = self.config.worker_interval;
         let tray_state_tx_worker = tray_state_tx.clone();
+        let sync_root_available_worker = Arc::clone(&sync_root_available);
         let worker_handle = tokio::spawn(async move {
             loop {
+                if !sync_root_available_worker.load(Ordering::SeqCst) {
+                    tokio::time::sleep(worker_interval).await;
+                    continue;
+                }
                 match engine_for_worker.run_once().await {
                     Ok(true) => {
                         eprintln!("[yadiskd] worker: processed queued operation");
@@ -213,12 +232,17 @@ impl DaemonRuntime {
         let materialize_cache_root = self.config.cache_root.clone();
         let materialize_remote_root = self.config.remote_root.clone();
         let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
+        let sync_root_available_materialize = Arc::clone(&sync_root_available);
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
             loop {
                 if !materialize_enabled {
                     tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                if !sync_root_available_materialize.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
                 match materialize_sync_tree(
@@ -248,6 +272,38 @@ impl DaemonRuntime {
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+
+        let engine_for_storage = Arc::clone(&self.engine);
+        let storage_sync_root = self.config.sync_root.clone();
+        let sync_root_available_storage = Arc::clone(&sync_root_available);
+        let local_events_enabled_storage = Arc::clone(&local_events_enabled);
+        let tray_state_tx_storage = tray_state_tx.clone();
+        let storage_handle = tokio::spawn(async move {
+            let mut known = sync_root_available_storage.load(Ordering::SeqCst);
+            loop {
+                let available = is_sync_root_available(&storage_sync_root).await;
+                if available != known {
+                    sync_root_available_storage.store(available, Ordering::SeqCst);
+                    if available {
+                        eprintln!(
+                            "[yadiskd] sync root restored: {}",
+                            storage_sync_root.display()
+                        );
+                        local_events_enabled_storage.store(true, Ordering::SeqCst);
+                    } else {
+                        eprintln!(
+                            "[yadiskd] sync root unavailable, pausing local operations: {}",
+                            storage_sync_root.display()
+                        );
+                        local_events_enabled_storage.store(false, Ordering::SeqCst);
+                        engine_for_storage.cancel_all_transfers();
+                        let _ = tray_state_tx_storage.send(TraySyncState::Error);
+                    }
+                    known = available;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         });
 
@@ -301,7 +357,11 @@ impl DaemonRuntime {
                                     .await;
                         }
                     }
-                    let tray_state = tray_state_from_states(&current_states);
+                    let has_active_work = engine_for_signals
+                        .has_active_or_queued_work()
+                        .await
+                        .unwrap_or(false);
+                    let tray_state = tray_state_from_states(&current_states, has_active_work);
                     if known_tray_state != Some(tray_state) {
                         let _ = tray_state_tx_signal.send(tray_state);
                         known_tray_state = Some(tray_state);
@@ -337,13 +397,20 @@ impl DaemonRuntime {
             let local_cache_root = self.config.cache_root.clone();
             let local_remote_root = self.config.remote_root.clone();
             let local_events_enabled_local = Arc::clone(&local_events_enabled);
+            let sync_root_available_local = Arc::clone(&sync_root_available);
             Some(tokio::spawn(async move {
                 let mut seen_uploads: HashMap<String, (u64, u128)> = HashMap::new();
                 while let Some(event) = rx.recv().await {
                     if !local_events_enabled_local.load(Ordering::SeqCst) {
                         continue;
                     }
+                    if !sync_root_available_local.load(Ordering::SeqCst) {
+                        continue;
+                    }
                     let event = normalize_local_event_for_remote_root(event, &local_remote_root);
+                    if should_ignore_local_event(&event) {
+                        continue;
+                    }
                     match &event {
                         LocalEvent::Upload { path } => {
                             if should_skip_local_upload_event(
@@ -402,6 +469,7 @@ impl DaemonRuntime {
         cloud_handle.abort();
         worker_handle.abort();
         materialize_handle.abort();
+        storage_handle.abort();
         eviction_handle.abort();
         signal_handle.abort();
         if let Some(handle) = local_handle {

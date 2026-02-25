@@ -19,7 +19,12 @@ fn maps_state_to_emblem_and_actions() {
     );
     assert_eq!(
         visible_actions_for_state(SyncUiState::Cached),
-        vec![NautilusAction::RemoveOfflineCopy, NautilusAction::RetrySync]
+        vec![NautilusAction::RemoveOfflineCopy]
+    );
+    assert!(visible_actions_for_state(SyncUiState::Syncing).is_empty());
+    assert_eq!(
+        visible_actions_for_state(SyncUiState::Error),
+        vec![NautilusAction::DownloadNow]
     );
     assert_eq!(
         menu_for_state(SyncUiState::CloudOnly)

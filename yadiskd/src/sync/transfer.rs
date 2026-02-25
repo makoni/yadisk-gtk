@@ -11,6 +11,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 #[derive(Debug, Error)]
@@ -23,6 +24,8 @@ pub enum TransferError {
     Url(#[from] url::ParseError),
     #[error("concurrency limiter is closed")]
     ConcurrencyClosed,
+    #[error("transfer cancelled")]
+    Cancelled,
     #[error("download integrity check failed: expected {expected_md5}, got {actual_md5}")]
     IntegrityMismatch {
         expected_md5: String,
@@ -76,6 +79,20 @@ impl TransferClient {
         target: &Path,
         expected_md5: Option<&str>,
     ) -> Result<(), TransferError> {
+        self.download_to_path_checked_cancellable(href, target, expected_md5, None)
+            .await
+    }
+
+    pub async fn download_to_path_checked_cancellable(
+        &self,
+        href: &str,
+        target: &Path,
+        expected_md5: Option<&str>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<(), TransferError> {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err(TransferError::Cancelled);
+        }
         let _permit = self
             .download_limit
             .clone()
@@ -83,7 +100,16 @@ impl TransferClient {
             .await
             .map_err(|_| TransferError::ConcurrencyClosed)?;
         let url = Url::parse(href)?;
-        let response = self.http.get(url).send().await?.error_for_status()?;
+        let request = self.http.get(url).send();
+        let response = if let Some(token) = cancel {
+            tokio::select! {
+                _ = token.cancelled() => return Err(TransferError::Cancelled),
+                response = request => response?,
+            }
+        } else {
+            request.await?
+        }
+        .error_for_status()?;
 
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -93,7 +119,17 @@ impl TransferClient {
         let mut stream = response.bytes_stream();
         let mut md5 = expected_md5.map(|_| Context::new());
 
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = if let Some(token) = cancel {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    let _ = tokio::fs::remove_file(&partial).await;
+                    return Err(TransferError::Cancelled);
+                }
+                chunk = stream.next() => chunk,
+            }
+        } else {
+            stream.next().await
+        } {
             let chunk = chunk?;
             file.write_all(&chunk).await?;
             if let Some(ctx) = md5.as_mut() {
@@ -120,6 +156,18 @@ impl TransferClient {
     }
 
     pub async fn upload_from_path(&self, href: &str, source: &Path) -> Result<(), TransferError> {
+        self.upload_from_path_cancellable(href, source, None).await
+    }
+
+    pub async fn upload_from_path_cancellable(
+        &self,
+        href: &str,
+        source: &Path,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<(), TransferError> {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err(TransferError::Cancelled);
+        }
         let _permit = self
             .upload_limit
             .clone()
@@ -130,12 +178,16 @@ impl TransferClient {
         let file = tokio::fs::File::open(source).await?;
         let stream = ReaderStream::new(file);
         let body = reqwest::Body::wrap_stream(stream);
-        self.http
-            .put(url)
-            .body(body)
-            .send()
-            .await?
-            .error_for_status()?;
+        let request = self.http.put(url).body(body).send();
+        let response = if let Some(token) = cancel {
+            tokio::select! {
+                _ = token.cancelled() => return Err(TransferError::Cancelled),
+                response = request => response?,
+            }
+        } else {
+            request.await?
+        };
+        response.error_for_status()?;
         Ok(())
     }
 
@@ -247,6 +299,49 @@ mod tests {
             .expect_err("expected md5 mismatch");
 
         assert!(matches!(err, TransferError::IntegrityMismatch { .. }));
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn upload_can_be_cancelled_before_start() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("in.bin");
+        std::fs::write(&source, b"payload").unwrap();
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let client = TransferClient::new();
+        let err = client
+            .upload_from_path_cancellable(
+                &format!("{}/upload", server.uri()),
+                &source,
+                Some(&token),
+            )
+            .await
+            .expect_err("expected cancellation");
+        assert!(matches!(err, TransferError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn download_can_be_cancelled_before_start() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("out.bin");
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let client = TransferClient::new();
+        let err = client
+            .download_to_path_checked_cancellable(
+                &format!("{}/file", server.uri()),
+                &target,
+                None,
+                Some(&token),
+            )
+            .await
+            .expect_err("expected cancellation");
+        assert!(matches!(err, TransferError::Cancelled));
         assert!(!target.exists());
     }
 }

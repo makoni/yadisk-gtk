@@ -26,6 +26,14 @@ fn local_watcher_is_enabled_by_default() {
     assert!(read_bool_env("NO_SUCH_BOOL_ENV_FOR_TEST", true));
 }
 
+#[tokio::test]
+async fn sync_root_availability_detects_missing_dir() {
+    let dir = tempdir().unwrap();
+    assert!(is_sync_root_available(dir.path()).await);
+    tokio::fs::remove_dir_all(dir.path()).await.unwrap();
+    assert!(!is_sync_root_available(dir.path()).await);
+}
+
 #[test]
 fn detects_enosys_in_error_chain() {
     let err = anyhow::Error::new(std::io::Error::from_raw_os_error(38));
@@ -33,18 +41,31 @@ fn detects_enosys_in_error_chain() {
 }
 
 #[test]
-fn tray_state_prioritizes_error_then_syncing() {
+fn tray_state_prioritizes_error_then_activity() {
     let mut states = HashMap::new();
-    assert_eq!(tray_state_from_states(&states), TraySyncState::Normal);
+    assert_eq!(
+        tray_state_from_states(&states, false),
+        TraySyncState::Normal
+    );
 
     states.insert("/A".to_string(), "syncing");
-    assert_eq!(tray_state_from_states(&states), TraySyncState::Syncing);
+    assert_eq!(
+        tray_state_from_states(&states, false),
+        TraySyncState::Normal
+    );
+    assert_eq!(
+        tray_state_from_states(&states, true),
+        TraySyncState::Syncing
+    );
 
     states.insert("/B".to_string(), "cached");
-    assert_eq!(tray_state_from_states(&states), TraySyncState::Syncing);
+    assert_eq!(
+        tray_state_from_states(&states, true),
+        TraySyncState::Syncing
+    );
 
     states.insert("/C".to_string(), "error");
-    assert_eq!(tray_state_from_states(&states), TraySyncState::Error);
+    assert_eq!(tray_state_from_states(&states, true), TraySyncState::Error);
 }
 
 #[test]
@@ -88,6 +109,75 @@ fn normalizes_local_events_to_remote_root_prefix() {
             from: "disk:/Docs/A.txt".into(),
             to: "disk:/Docs/B.txt".into()
         }
+    );
+}
+
+#[test]
+fn ignores_goutputstream_temporary_local_events() {
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/.goutputstream-ABC".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Delete {
+        path: "/.goutputstream-ABC".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Move {
+        from: "disk:/.goutputstream-ABC".into(),
+        to: "disk:/test.txt".into()
+    }));
+    assert!(!should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/test.txt".into()
+    }));
+}
+
+#[test]
+fn ignores_known_temporary_name_patterns() {
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/.~lock.file.txt#".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/.#draft.md".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/~$Report.docx".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/edit.swp".into()
+    }));
+    assert!(should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/backup.txt~".into()
+    }));
+    assert!(!should_ignore_local_event(&LocalEvent::Upload {
+        path: "disk:/.env".into()
+    }));
+}
+
+#[test]
+fn goutputstream_edit_sequence_keeps_only_target_events() {
+    let input = vec![
+        LocalEvent::Upload {
+            path: "disk:/.goutputstream-WTZ4K3".into(),
+        },
+        LocalEvent::Upload {
+            path: "disk:/test.txt".into(),
+        },
+        LocalEvent::Delete {
+            path: "disk:/.goutputstream-WTZ4K3".into(),
+        },
+        LocalEvent::Move {
+            from: "disk:/.goutputstream-WTZ4K3".into(),
+            to: "disk:/test.txt".into(),
+        },
+    ];
+    let filtered: Vec<LocalEvent> = input
+        .into_iter()
+        .map(|event| normalize_local_event_for_remote_root(event, "disk:/"))
+        .filter(|event| !should_ignore_local_event(event))
+        .collect();
+    assert_eq!(
+        filtered,
+        vec![LocalEvent::Upload {
+            path: "disk:/test.txt".into()
+        }]
     );
 }
 

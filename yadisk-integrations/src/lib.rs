@@ -25,7 +25,7 @@ impl NautilusExtensionMvp {
     }
 
     pub fn context_actions() -> Vec<&'static str> {
-        vec!["Download", "Pin", "Evict", "Retry"]
+        vec!["Download", "Pin", "Evict"]
     }
 
     pub fn state_badge_label(state: SyncUiState) -> &'static str {
@@ -42,16 +42,16 @@ impl NautilusExtensionMvp {
             SyncUiState::CloudOnly => Some("Save Offline"),
             SyncUiState::Cached => Some("Remove Offline Copy"),
             SyncUiState::Syncing => None,
-            SyncUiState::Error => Some("Retry"),
+            SyncUiState::Error => Some("Save Offline"),
         }
     }
 
     pub fn context_actions_for_state(state: SyncUiState) -> Vec<&'static str> {
         match state {
             SyncUiState::CloudOnly => vec!["Save Offline", "Download", "Pin"],
-            SyncUiState::Cached => vec!["Remove Offline Copy", "Evict", "Retry"],
-            SyncUiState::Syncing => vec!["Retry"],
-            SyncUiState::Error => vec!["Retry", "Save Offline"],
+            SyncUiState::Cached => vec!["Remove Offline Copy", "Evict"],
+            SyncUiState::Syncing => vec![],
+            SyncUiState::Error => vec!["Save Offline"],
         }
     }
 }
@@ -114,7 +114,7 @@ mod tests {
     fn context_actions_cover_mvp_commands() {
         assert_eq!(
             NautilusExtensionMvp::context_actions(),
-            vec!["Download", "Pin", "Evict", "Retry"]
+            vec!["Download", "Pin", "Evict"]
         );
         assert_eq!(
             NautilusExtensionMvp::context_actions_for_state(SyncUiState::CloudOnly),
@@ -122,7 +122,7 @@ mod tests {
         );
         assert_eq!(
             NautilusExtensionMvp::context_actions_for_state(SyncUiState::Cached),
-            vec!["Remove Offline Copy", "Evict", "Retry"]
+            vec!["Remove Offline Copy", "Evict"]
         );
         assert_eq!(
             NautilusExtensionMvp::primary_action_for_state(SyncUiState::CloudOnly),

@@ -34,6 +34,10 @@ impl SyncEngine {
     pub async fn sync_directory_incremental(&self, path: &str) -> Result<SyncDelta, EngineError> {
         let remote_items = self.collect_remote_tree(path).await?;
         let local_items = self.index.list_items_by_prefix(path).await?;
+        let local_by_path: HashMap<String, _> = local_items
+            .iter()
+            .map(|item| (item.path.clone(), item.clone()))
+            .collect();
         let local_by_resource_id: HashMap<String, _> = local_items
             .iter()
             .filter_map(|item| item.resource_id.clone().map(|rid| (rid, item.clone())))
@@ -47,6 +51,9 @@ impl SyncEngine {
         let mut delta = SyncDelta::default();
 
         for item in &remote_items {
+            let previous_by_path = path_variants(&item.path)
+                .into_iter()
+                .find_map(|candidate| local_by_path.get(&candidate).cloned());
             let input = ItemInput {
                 path: item.path.clone(),
                 parent_path: parent_path(&item.path),
@@ -97,6 +104,21 @@ impl SyncEngine {
                 self.index
                     .set_state(record.id, FileState::CloudOnly, false, None)
                     .await?;
+            }
+
+            if input.item_type == ItemType::File
+                && let Some(previous) = previous_by_path
+            {
+                let remote_changed = previous.hash != input.hash
+                    || previous.modified != input.modified
+                    || previous.size != input.size;
+                if remote_changed
+                    && let Some(state) = self.index.get_state(record.id).await?
+                    && matches!(state.state, FileState::Cached)
+                {
+                    self.enqueue_download(&item.path).await?;
+                    delta.enqueued_downloads += 1;
+                }
             }
         }
 
@@ -232,6 +254,7 @@ impl SyncEngine {
 
     pub async fn enqueue_delete(&self, path: &str) -> Result<i64, EngineError> {
         self.index.delete_ops_for_path(path).await?;
+        self.cancel_transfer(path);
         if let Some(item) = self.index.get_item_by_path(path).await? {
             self.index
                 .set_state(item.id, FileState::Syncing, true, None)
@@ -489,8 +512,15 @@ impl SyncEngine {
                     );
                     return Err(err);
                 }
-                let retry_after =
-                    now_unix().saturating_add(self.backoff.delay(op.attempt + 1).as_secs() as i64);
+                let retry_after = match &err {
+                    EngineError::Api(api) => api
+                        .retry_after_secs()
+                        .map(|seconds| now_unix().saturating_add(seconds as i64)),
+                    _ => None,
+                }
+                .unwrap_or_else(|| {
+                    now_unix().saturating_add(self.backoff.delay(op.attempt + 1).as_secs() as i64)
+                });
                 self.index
                     .requeue_op(&op, retry_after, Some(&err.to_string()))
                     .await?;
@@ -502,6 +532,42 @@ impl SyncEngine {
                     retry_after
                 );
                 return Ok(true);
+            }
+            if let Ok(Some(item)) = self.index.get_item_by_path(&op.path).await {
+                if matches!(
+                    &err,
+                    EngineError::Api(yadisk_core::YadiskError::Api { status, .. })
+                        if matches!(
+                            *status,
+                            reqwest::StatusCode::PAYLOAD_TOO_LARGE
+                                | reqwest::StatusCode::INSUFFICIENT_STORAGE
+                        )
+                ) {
+                    self.refresh_upload_limit_cache();
+                }
+                let pinned = self
+                    .index
+                    .get_state(item.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|state| state.pinned)
+                    .unwrap_or(true);
+                let _ = self
+                    .index
+                    .set_state_with_meta(
+                        item.id,
+                        FileState::Error,
+                        pinned,
+                        Some(&err.to_string()),
+                        StateMeta {
+                            retry_at: None,
+                            last_success_at: None,
+                            last_error_at: Some(now_unix()),
+                            dirty: false,
+                        },
+                    )
+                    .await;
             }
             eprintln!(
                 "[yadiskd] op failed: kind={:?} path={} err={}",

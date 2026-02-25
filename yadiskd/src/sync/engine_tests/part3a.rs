@@ -180,6 +180,60 @@
     }
 
     #[tokio::test]
+    async fn delete_cancels_inflight_upload_for_same_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/upload"))
+            .and(query_param("path", "disk:/Docs/InFlight.txt"))
+            .and(query_param("overwrite", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/upload", server.uri()),
+                "method": "PUT",
+                "templated": false
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload"))
+            .respond_with(ResponseTemplate::new(201).set_delay(std::time::Duration::from_secs(5)))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "disk:/Docs/InFlight.txt"))
+            .and(query_param("permanently", "true"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = std::sync::Arc::new(make_engine(&server, dir.path()).await);
+        let target = cache_path_for(dir.path(), "disk:/Docs/InFlight.txt").unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"inflight").unwrap();
+        engine
+            .ingest_local_event(LocalEvent::Upload {
+                path: "disk:/Docs/InFlight.txt".into(),
+            })
+            .await
+            .unwrap();
+
+        let engine_for_upload = std::sync::Arc::clone(&engine);
+        let upload_handle = tokio::spawn(async move { engine_for_upload.run_once().await });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        engine
+            .ingest_local_event(LocalEvent::Delete {
+                path: "disk:/Docs/InFlight.txt".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(upload_handle.await.unwrap().unwrap());
+        assert!(engine.run_once().await.unwrap());
+        assert!(!engine.run_once().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn run_once_mkdir_creates_remote_folder_and_sets_cached_state() {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
@@ -379,6 +433,108 @@
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn sync_directory_incremental_remote_change_enqueues_download_for_cached_file() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "/Docs"))
+            .and(query_param("limit", "100"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "_embedded": {
+                    "limit": 100,
+                    "offset": 0,
+                    "total": 1,
+                    "items": [
+                        {"path": "/Docs/A.txt", "name": "A.txt", "type": "file", "size": 11, "resource_id": "rid-a", "md5": "new-md5"}
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let existing = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(10),
+                modified: None,
+                hash: Some("old-md5".into()),
+                resource_id: Some("rid-a".into()),
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(existing.id, FileState::Cached, false, None)
+            .await
+            .unwrap();
+
+        let delta = engine.sync_directory_incremental("/Docs").await.unwrap();
+        assert_eq!(delta.enqueued_downloads, 1);
+        let op = engine.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(op.kind, OperationKind::Download);
+        assert_eq!(op.path, "/Docs/A.txt");
+    }
+
+    #[tokio::test]
+    async fn sync_directory_incremental_remote_change_does_not_download_cloud_only_file() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "/Docs"))
+            .and(query_param("limit", "100"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "_embedded": {
+                    "limit": 100,
+                    "offset": 0,
+                    "total": 1,
+                    "items": [
+                        {"path": "/Docs/A.txt", "name": "A.txt", "type": "file", "size": 11, "resource_id": "rid-a", "md5": "new-md5"}
+                    ]
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let existing = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(10),
+                modified: None,
+                hash: Some("old-md5".into()),
+                resource_id: Some("rid-a".into()),
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(existing.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+
+        let delta = engine.sync_directory_incremental("/Docs").await.unwrap();
+        assert_eq!(delta.enqueued_downloads, 0);
+        assert!(engine.index.dequeue_op().await.unwrap().is_none());
     }
 
     #[tokio::test]

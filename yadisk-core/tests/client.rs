@@ -390,7 +390,11 @@ async fn api_error_classification_marks_rate_limit_retryable() {
 
     Mock::given(method("GET"))
         .and(path("/v1/disk"))
-        .respond_with(ResponseTemplate::new(429).set_body_string("rate limit"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "3")
+                .set_body_string("rate limit"),
+        )
         .mount(&server)
         .await;
 
@@ -401,4 +405,23 @@ async fn api_error_classification_marks_rate_limit_retryable() {
         .expect_err("expected API error");
     assert_eq!(err.classification(), Some(ApiErrorClass::RateLimit));
     assert!(err.is_retryable());
+    assert_eq!(err.retry_after_secs(), Some(3));
+}
+
+#[tokio::test]
+async fn api_error_classification_treats_insufficient_storage_as_permanent() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/disk"))
+        .respond_with(ResponseTemplate::new(507).set_body_string("insufficient storage"))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let err = client
+        .get_disk_info()
+        .await
+        .expect_err("expected API error");
+    assert_eq!(err.classification(), Some(ApiErrorClass::Permanent));
+    assert!(!err.is_retryable());
 }

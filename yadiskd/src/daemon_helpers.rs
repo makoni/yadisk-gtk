@@ -1,18 +1,16 @@
-fn tray_state_from_states(states: &HashMap<String, &'static str>) -> TraySyncState {
-    let mut has_syncing = false;
+fn tray_state_from_states(
+    states: &HashMap<String, &'static str>,
+    has_active_work: bool,
+) -> TraySyncState {
     for state in states.values() {
         if *state == "error" {
             return TraySyncState::Error;
         }
-        if *state == "syncing" {
-            has_syncing = true;
-        }
     }
-    if has_syncing {
-        TraySyncState::Syncing
-    } else {
-        TraySyncState::Normal
+    if has_active_work {
+        return TraySyncState::Syncing;
     }
+    TraySyncState::Normal
 }
 
 async fn resolve_valid_token(base_url: Option<&str>) -> anyhow::Result<String> {
@@ -324,6 +322,41 @@ fn normalize_local_event_for_remote_root(event: LocalEvent, remote_root: &str) -
     }
 }
 
+fn is_ignored_temporary_name(name: &str) -> bool {
+    name.starts_with(".goutputstream-")
+        || name.starts_with(".~lock.") && name.ends_with('#')
+        || name.starts_with(".#")
+        || name.starts_with("~$")
+        || name.starts_with(".nfs")
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+        || name.ends_with(".swx")
+        || name.ends_with('~')
+}
+
+fn is_ignored_temporary_path(path: &str) -> bool {
+    let normalized = path
+        .strip_prefix("disk:/")
+        .unwrap_or(path)
+        .trim_start_matches('/');
+    normalized
+        .rsplit('/')
+        .next()
+        .map(is_ignored_temporary_name)
+        .unwrap_or(false)
+}
+
+fn should_ignore_local_event(event: &LocalEvent) -> bool {
+    match event {
+        LocalEvent::Upload { path } | LocalEvent::Delete { path } | LocalEvent::Mkdir { path } => {
+            is_ignored_temporary_path(path)
+        }
+        LocalEvent::Move { from, to } => {
+            is_ignored_temporary_path(from) || is_ignored_temporary_path(to)
+        }
+    }
+}
+
 async fn materialize_sync_tree(
     engine: &SyncEngine,
     sync_root: &Path,
@@ -431,6 +464,13 @@ fn error_contains_enosys(err: &anyhow::Error) -> bool {
             .and_then(std::io::Error::raw_os_error)
             == Some(38)
     })
+}
+
+async fn is_sync_root_available(sync_root: &Path) -> bool {
+    tokio::fs::metadata(sync_root)
+        .await
+        .map(|meta| meta.is_dir())
+        .unwrap_or(false)
 }
 
 fn sync_path_for(sync_root: &Path, remote_path: &str) -> anyhow::Result<PathBuf> {

@@ -99,6 +99,25 @@ fn map_event(root: &Path, event: Event) -> Vec<LocalEvent> {
     }
 }
 
+fn is_ignored_temporary_name(name: &str) -> bool {
+    name.starts_with(".goutputstream-")
+        || name.starts_with(".~lock.") && name.ends_with('#')
+        || name.starts_with(".#")
+        || name.starts_with("~$")
+        || name.starts_with(".nfs")
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+        || name.ends_with(".swx")
+        || name.ends_with('~')
+}
+
+fn is_ignored_temp_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(is_ignored_temporary_name)
+        .unwrap_or(false)
+}
+
 fn map_created_path(root: &Path, path: &Path) -> Option<LocalEvent> {
     let remote = to_remote_path(root, path)?;
     let meta = std::fs::symlink_metadata(path).ok()?;
@@ -122,6 +141,9 @@ fn map_modified_path(root: &Path, path: &Path) -> Option<LocalEvent> {
 }
 
 fn to_remote_path(root: &Path, path: &Path) -> Option<String> {
+    if is_ignored_temp_path(path) {
+        return None;
+    }
     let relative = path.strip_prefix(root).ok()?;
     let remote = PathBuf::from("/").join(relative);
     Some(remote.to_string_lossy().replace('\\', "/"))
@@ -282,6 +304,80 @@ mod tests {
                 path: "/Docs/A.txt".into()
             }]
         );
+    }
+
+    #[test]
+    fn goutputstream_edit_sequence_ignores_temp_ops() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let target = root.join("test.txt");
+        let tmp = root.join(".goutputstream-WTZ4K3");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::write(&tmp, b"new").unwrap();
+
+        let events = vec![
+            Event {
+                kind: EventKind::Create(notify::event::CreateKind::File),
+                paths: vec![tmp.clone()],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                    notify::event::DataChange::Any,
+                )),
+                paths: vec![target.clone()],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Remove(notify::event::RemoveKind::File),
+                paths: vec![tmp.clone()],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::Both,
+                )),
+                paths: vec![tmp, target],
+                attrs: Default::default(),
+            },
+        ];
+
+        let mapped: Vec<LocalEvent> = events
+            .into_iter()
+            .flat_map(|event| map_event(root, event))
+            .collect();
+        assert!(
+            mapped
+                .iter()
+                .all(|event| !matches!(event, LocalEvent::Move { .. } | LocalEvent::Delete { .. }))
+        );
+        assert!(mapped.iter().all(|event| match event {
+            LocalEvent::Upload { path } | LocalEvent::Mkdir { path } => {
+                !path.contains(".goutputstream-")
+            }
+            LocalEvent::Delete { path } => !path.contains(".goutputstream-"),
+            LocalEvent::Move { from, to } => {
+                !from.contains(".goutputstream-") && !to.contains(".goutputstream-")
+            }
+        }));
+        assert!(mapped.contains(&LocalEvent::Upload {
+            path: "/test.txt".into()
+        }));
+    }
+
+    #[test]
+    fn ignores_known_temporary_name_patterns() {
+        assert!(is_ignored_temporary_name(".goutputstream-ABC"));
+        assert!(is_ignored_temporary_name(".~lock.file.txt#"));
+        assert!(is_ignored_temporary_name(".#draft.md"));
+        assert!(is_ignored_temporary_name("~$Report.docx"));
+        assert!(is_ignored_temporary_name(".nfs000001"));
+        assert!(is_ignored_temporary_name("edit.swp"));
+        assert!(is_ignored_temporary_name("edit.swo"));
+        assert!(is_ignored_temporary_name("edit.swx"));
+        assert!(is_ignored_temporary_name("backup.txt~"));
+        assert!(!is_ignored_temporary_name(".env"));
+        assert!(!is_ignored_temporary_name("test.txt"));
     }
 
     #[test]

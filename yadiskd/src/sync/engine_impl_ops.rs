@@ -53,9 +53,22 @@ impl SyncEngine {
 
         let link = self.client.get_download_link(path).await?;
         let target = cache_path_for(&self.cache_root, path)?;
-        self.transfer
-            .download_to_path_checked(link.href.as_str(), &target, item.hash.as_deref())
-            .await?;
+        let token = self.register_transfer_token(path);
+        let transfer_result = self
+            .transfer
+            .download_to_path_checked_cancellable(
+                link.href.as_str(),
+                &target,
+                item.hash.as_deref(),
+                Some(&token),
+            )
+            .await;
+        self.unregister_transfer_token(path);
+        match transfer_result {
+            Ok(()) => {}
+            Err(TransferError::Cancelled) => return Ok(()),
+            Err(err) => return Err(err.into()),
+        }
 
         self.index
             .set_state_with_meta(
@@ -93,6 +106,14 @@ impl SyncEngine {
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
         let local_version = self.local_file_version(&source).await?;
+        if let Some(max_size) = self.max_upload_size().await
+            && local_version.size > max_size
+        {
+            return Err(EngineError::UploadTooLarge {
+                size: local_version.size,
+                max_size,
+            });
+        }
 
         let remote = match self.client.get_resource(path).await {
             Ok(resource) => Some(resource),
@@ -258,9 +279,27 @@ impl SyncEngine {
         local_version: &LocalFileVersion,
     ) -> Result<(), EngineError> {
         let link = self.client.get_upload_link(path, true).await?;
-        self.transfer
-            .upload_from_path(link.href.as_str(), source)
-            .await?;
+        let token = self.register_transfer_token(path);
+        let transfer_result = self
+            .transfer
+            .upload_from_path_cancellable(link.href.as_str(), source, Some(&token))
+            .await;
+        self.unregister_transfer_token(path);
+        match transfer_result {
+            Ok(()) => {}
+            Err(TransferError::Cancelled) => return Ok(()),
+            Err(TransferError::Request(err))
+                if matches!(
+                    err.status(),
+                    Some(reqwest::StatusCode::PAYLOAD_TOO_LARGE)
+                        | Some(reqwest::StatusCode::INSUFFICIENT_STORAGE)
+                ) =>
+            {
+                self.refresh_upload_limit_cache();
+                return Err(TransferError::Request(err).into());
+            }
+            Err(err) => return Err(err.into()),
+        }
         self.mark_item_synced(item, path, local_version).await
     }
 

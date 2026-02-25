@@ -410,6 +410,18 @@ impl IndexStore {
         Ok(Some(operation))
     }
 
+    pub async fn has_ready_op(&self) -> Result<bool, IndexError> {
+        let row = sqlx::query(
+            "SELECT 1
+             FROM ops_queue
+             WHERE retry_at IS NULL OR retry_at <= CAST(strftime('%s','now') AS INTEGER)
+             LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn record_conflict(
         &self,
         path: &str,
