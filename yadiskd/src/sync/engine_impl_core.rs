@@ -109,6 +109,12 @@ impl SyncEngine {
             {
                 continue;
             }
+            if old.resource_id.is_none()
+                && let Some(state) = self.index.get_state(old.id).await?
+                && matches!(state.state, FileState::Syncing | FileState::Cached)
+            {
+                continue;
+            }
             self.index.delete_item_by_path(&old.path).await?;
             delta.deleted += 1;
         }
@@ -225,6 +231,12 @@ impl SyncEngine {
     }
 
     pub async fn enqueue_delete(&self, path: &str) -> Result<i64, EngineError> {
+        self.index.delete_ops_for_path(path).await?;
+        if let Some(item) = self.index.get_item_by_path(path).await? {
+            self.index
+                .set_state(item.id, FileState::Syncing, true, None)
+                .await?;
+        }
         Ok(self
             .index
             .enqueue_op(&Operation {

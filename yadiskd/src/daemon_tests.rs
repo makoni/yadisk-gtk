@@ -509,3 +509,44 @@ async fn materialize_updates_existing_files_for_state_transitions() {
         b"hello"
     );
 }
+
+#[tokio::test]
+async fn materialize_skips_missing_syncing_files() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let index = IndexStore::from_pool(pool);
+    index.init().await.unwrap();
+    let sync_dir = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+
+    let item = index
+        .upsert_item(&ItemInput {
+            path: "/Docs/Deleting.txt".into(),
+            parent_path: Some("/Docs".into()),
+            name: "Deleting.txt".into(),
+            item_type: ItemType::File,
+            size: Some(5),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+    index
+        .set_state(item.id, FileState::Syncing, true, None)
+        .await
+        .unwrap();
+
+    let client = YadiskClient::with_base_url("http://127.0.0.1:9", "token").unwrap();
+    let engine = SyncEngine::new(client, index, cache_dir.path().to_path_buf());
+    materialize_sync_tree(&engine, sync_dir.path(), cache_dir.path(), "/")
+        .await
+        .unwrap();
+
+    assert!(
+        tokio::fs::metadata(sync_dir.path().join("Docs/Deleting.txt"))
+            .await
+            .is_err()
+    );
+}

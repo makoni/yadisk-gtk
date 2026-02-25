@@ -146,6 +146,40 @@
     }
 
     #[tokio::test]
+    async fn delete_cancels_pending_upload_for_same_path() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "disk:/Docs/Race.txt"))
+            .and(query_param("permanently", "true"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let target = cache_path_for(dir.path(), "disk:/Docs/Race.txt").unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"race").unwrap();
+
+        engine
+            .ingest_local_event(LocalEvent::Upload {
+                path: "disk:/Docs/Race.txt".into(),
+            })
+            .await
+            .unwrap();
+        engine
+            .ingest_local_event(LocalEvent::Delete {
+                path: "disk:/Docs/Race.txt".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(engine.run_once().await.unwrap());
+        assert!(!engine.run_once().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn run_once_mkdir_creates_remote_folder_and_sets_cached_state() {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))
@@ -292,6 +326,59 @@
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn sync_directory_incremental_keeps_local_pending_items_without_resource_id() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "disk:/"))
+            .and(query_param("limit", "100"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "_embedded": {
+                    "limit": 100,
+                    "offset": 0,
+                    "total": 0,
+                    "items": []
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let item = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "disk:/LocalPending.txt".into(),
+                parent_path: Some("disk:/".into()),
+                name: "LocalPending.txt".into(),
+                item_type: ItemType::File,
+                size: Some(4),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(item.id, FileState::Syncing, true, None)
+            .await
+            .unwrap();
+
+        let delta = engine.sync_directory_incremental("disk:/").await.unwrap();
+        assert_eq!(delta.deleted, 0);
+        assert!(engine
+            .index
+            .get_item_by_path("disk:/LocalPending.txt")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

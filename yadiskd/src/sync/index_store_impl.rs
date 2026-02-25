@@ -340,6 +340,14 @@ impl IndexStore {
         Ok(result.last_insert_rowid())
     }
 
+    pub async fn delete_ops_for_path(&self, path: &str) -> Result<(), IndexError> {
+        sqlx::query("DELETE FROM ops_queue WHERE path = ?1")
+            .bind(path)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn requeue_op(
         &self,
         op: &Operation,

@@ -390,6 +390,9 @@ async fn materialize_sync_tree(
                 }
             }
         }
+        if matches!(state, Some(FileState::Syncing)) {
+            continue;
+        }
 
         match tokio::fs::OpenOptions::new()
             .create_new(true)

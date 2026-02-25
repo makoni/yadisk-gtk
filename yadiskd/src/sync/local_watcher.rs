@@ -32,7 +32,7 @@ pub fn start_notify_watcher(
 
 fn map_event(root: &Path, event: Event) -> Vec<LocalEvent> {
     match event.kind {
-        EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
+        EventKind::Modify(notify::event::ModifyKind::Name(mode)) => {
             if event.paths.len() >= 2 {
                 let from = to_remote_path(root, &event.paths[0]);
                 let to = to_remote_path(root, &event.paths[1]);
@@ -45,6 +45,29 @@ fn map_event(root: &Path, event: Event) -> Vec<LocalEvent> {
                         }
                     }
                     (None, None) => {}
+                }
+            }
+            if event.paths.len() == 1 {
+                let path = &event.paths[0];
+                match mode {
+                    notify::event::RenameMode::From => {
+                        if let Some(remote) = to_remote_path(root, path) {
+                            return vec![LocalEvent::Delete { path: remote }];
+                        }
+                    }
+                    notify::event::RenameMode::To => {
+                        if let Some(created) = map_created_path(root, path) {
+                            return vec![created];
+                        }
+                    }
+                    _ => {
+                        if let Some(created) = map_created_path(root, path) {
+                            return vec![created];
+                        }
+                        if let Some(remote) = to_remote_path(root, path) {
+                            return vec![LocalEvent::Delete { path: remote }];
+                        }
+                    }
                 }
             }
             Vec::new()
@@ -192,6 +215,48 @@ mod tests {
             mapped,
             vec![LocalEvent::Delete {
                 path: "/Docs/A.txt".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn maps_rename_from_single_path_to_delete() {
+        let root = Path::new("/tmp/root");
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::From,
+            )),
+            paths: vec![PathBuf::from("/tmp/root/Docs/A.txt")],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert_eq!(
+            mapped,
+            vec![LocalEvent::Delete {
+                path: "/Docs/A.txt".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn maps_rename_to_single_path_to_upload() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let file = root.join("Docs/B.txt");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::To,
+            )),
+            paths: vec![file],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert_eq!(
+            mapped,
+            vec![LocalEvent::Upload {
+                path: "/Docs/B.txt".into()
             }]
         );
     }
