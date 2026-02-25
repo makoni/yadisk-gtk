@@ -1,5 +1,5 @@
 {
-  "app-id": "com.yadisk.Gtk",
+  "app-id": "me.spaceinbox.yadisk.Gtk",
   "runtime": "org.gnome.Platform",
   "runtime-version": "47",
   "sdk": "org.gnome.Sdk",

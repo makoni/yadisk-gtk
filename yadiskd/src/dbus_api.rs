@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::sync::RwLock;
+use yadisk_integrations::ids::{
+    DBUS_ERROR_BUSY, DBUS_ERROR_FAILED, DBUS_ERROR_INVALID_PATH, DBUS_ERROR_NOT_FOUND,
+};
 use zbus::{interface, object_server::SignalEmitter};
 
 use crate::sync::engine::EngineError;
@@ -53,10 +56,10 @@ pub enum DbusServiceError {
 
 pub fn dbus_error_name(err: &DbusServiceError) -> &'static str {
     match err {
-        DbusServiceError::NotFound => "com.yadisk.Sync1.Error.NotFound",
-        DbusServiceError::Busy => "com.yadisk.Sync1.Error.Busy",
-        DbusServiceError::InvalidPath => "com.yadisk.Sync1.Error.InvalidPath",
-        DbusServiceError::Failed => "com.yadisk.Sync1.Error.Failed",
+        DbusServiceError::NotFound => DBUS_ERROR_NOT_FOUND,
+        DbusServiceError::Busy => DBUS_ERROR_BUSY,
+        DbusServiceError::InvalidPath => DBUS_ERROR_INVALID_PATH,
+        DbusServiceError::Failed => DBUS_ERROR_FAILED,
     }
 }
 
@@ -134,7 +137,7 @@ fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
     }
 }
 
-#[interface(name = "com.yadisk.Sync1")]
+#[interface(name = "me.spaceinbox.yadisk.Sync1")]
 impl SyncDbusService {
     async fn download(&self, path: &str) -> zbus::fdo::Result<()> {
         let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
@@ -280,19 +283,16 @@ mod tests {
     fn maps_errors_to_stable_dbus_names() {
         assert_eq!(
             dbus_error_name(&DbusServiceError::NotFound),
-            "com.yadisk.Sync1.Error.NotFound"
+            DBUS_ERROR_NOT_FOUND
         );
-        assert_eq!(
-            dbus_error_name(&DbusServiceError::Busy),
-            "com.yadisk.Sync1.Error.Busy"
-        );
+        assert_eq!(dbus_error_name(&DbusServiceError::Busy), DBUS_ERROR_BUSY);
         assert_eq!(
             dbus_error_name(&DbusServiceError::InvalidPath),
-            "com.yadisk.Sync1.Error.InvalidPath"
+            DBUS_ERROR_INVALID_PATH
         );
         assert_eq!(
             dbus_error_name(&DbusServiceError::Failed),
-            "com.yadisk.Sync1.Error.Failed"
+            DBUS_ERROR_FAILED
         );
     }
 
@@ -313,7 +313,7 @@ mod tests {
             .expect_err("expected invalid path error");
         match err {
             zbus::fdo::Error::Failed(msg) => {
-                assert!(msg.contains("com.yadisk.Sync1.Error.InvalidPath"));
+                assert!(msg.contains(DBUS_ERROR_INVALID_PATH));
             }
             other => panic!("unexpected error: {other:?}"),
         }

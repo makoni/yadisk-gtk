@@ -18,14 +18,12 @@ mod app {
     };
     use libc::{EIO, ENOENT};
     use tokio::runtime::Runtime;
+    use yadisk_integrations::ids::{DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
     use yadiskd::sync::index::{FileState, IndexStore, ItemType};
     use yadiskd::sync::paths::cache_path_for;
     use zbus::blocking::{Connection, Proxy};
 
     const TTL: Duration = Duration::from_secs(1);
-    const DBUS_NAME: &str = "com.yadisk.Sync1";
-    const DBUS_PATH: &str = "/com/yadisk/Sync1";
-    const DBUS_INTERFACE: &str = "com.yadisk.Sync1";
 
     struct InodeMap {
         next: u64,
@@ -77,7 +75,12 @@ mod app {
             let Some(connection) = &self.connection else {
                 return false;
             };
-            let Ok(proxy) = Proxy::new(connection, DBUS_NAME, DBUS_PATH, DBUS_INTERFACE) else {
+            let Ok(proxy) = Proxy::new(
+                connection,
+                DBUS_NAME_SYNC,
+                DBUS_OBJECT_PATH_SYNC,
+                DBUS_INTERFACE_SYNC,
+            ) else {
                 return false;
             };
             proxy.call_method("Download", &(path)).is_ok()

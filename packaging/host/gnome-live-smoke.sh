@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE="com.yadisk.Sync1"
-OBJECT="/com/yadisk/Sync1"
-IFACE="com.yadisk.Sync1"
+SERVICE="me.spaceinbox.yadisk.Sync1"
+OBJECT="/me/spaceinbox/yadisk/Sync1"
+IFACE="me.spaceinbox.yadisk.Sync1"
 TEST_PATH="${1:-/Docs/smoke.txt}"
 
 echo "[smoke] restarting user daemon"
@@ -26,7 +26,7 @@ set +e
 download_out="$(gdbus call --session --dest "${SERVICE}" --object-path "${OBJECT}" --method "${IFACE}.Download" "${TEST_PATH}" 2>&1)"
 download_code=$?
 set -e
-if [[ ${download_code} -ne 0 ]] && [[ "${download_out}" != *"com.yadisk.Sync1.Error.NotFound"* ]]; then
+if [[ ${download_code} -ne 0 ]] && [[ "${download_out}" != *"me.spaceinbox.yadisk.Sync1.Error.NotFound"* ]]; then
   echo "[smoke] unexpected Download error: ${download_out}" >&2
   exit 1
 fi

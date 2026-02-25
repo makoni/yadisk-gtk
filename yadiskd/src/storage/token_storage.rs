@@ -1,13 +1,13 @@
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use yadisk_integrations::ids::KEYRING_SERVICE;
 
 use super::{
     portal_token_store::{PortalStoreError, PortalTokenStore},
     secret_portal,
 };
 
-const SERVICE_NAME: &str = "com.yadisk.gtk";
 const TOKEN_KEY: &str = "yadisk_token";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,7 +73,7 @@ enum Backend {
 
 impl TokenStorage {
     pub async fn new() -> Result<Self, StorageError> {
-        let entry = Entry::new(SERVICE_NAME, TOKEN_KEY)?;
+        let entry = Entry::new(KEYRING_SERVICE, TOKEN_KEY)?;
         let preference = secret_portal::portal_preference();
 
         if preference.use_portal() {

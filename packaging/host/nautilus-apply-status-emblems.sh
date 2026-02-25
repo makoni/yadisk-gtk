@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE="com.yadisk.Sync1"
-OBJECT="/com/yadisk/Sync1"
-IFACE="com.yadisk.Sync1"
+SERVICE="me.spaceinbox.yadisk.Sync1"
+OBJECT="/me/spaceinbox/yadisk/Sync1"
+IFACE="me.spaceinbox.yadisk.Sync1"
 SYNC_ROOT="${YADISK_SYNC_DIR:-$HOME/Yandex Disk}"
 
 map_remote_path() {

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use tokio::sync::mpsc;
+use yadisk_integrations::ids::DBUS_NAME_SYNC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraySyncState {
@@ -111,7 +112,7 @@ struct YadiskTray {
 
 impl ksni::Tray for YadiskTray {
     fn id(&self) -> String {
-        "com.yadisk.Sync1".to_string()
+        DBUS_NAME_SYNC.to_string()
     }
 
     fn title(&self) -> String {

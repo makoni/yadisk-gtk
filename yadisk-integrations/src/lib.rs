@@ -1,3 +1,5 @@
+pub mod ids;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncUiState {
     CloudOnly,
@@ -86,6 +88,7 @@ impl CloudProviderAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids;
 
     #[test]
     fn uses_default_adwaita_icons() {
@@ -143,5 +146,11 @@ mod tests {
         assert_eq!(account.health, AccountHealth::Online);
         account.apply_health_from_state("broken");
         assert_eq!(account.health, AccountHealth::Error);
+    }
+
+    #[test]
+    fn ids_are_consistent() {
+        assert_eq!(ids::DBUS_NAME_SYNC, ids::DBUS_INTERFACE_SYNC);
+        assert_eq!(ids::KEYRING_SERVICE, ids::APP_ID_BASE);
     }
 }

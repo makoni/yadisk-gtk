@@ -1,7 +1,7 @@
 [dbus]
-name = "com.yadisk.Sync1"
-path = "/com/yadisk/Sync1"
-interface = "com.yadisk.Sync1"
+name = "me.spaceinbox.yadisk.Sync1"
+path = "/me/spaceinbox/yadisk/Sync1"
+interface = "me.spaceinbox.yadisk.Sync1"
 
 [startup]
 discovery = ["systemd --user", "dbus name ownership"]

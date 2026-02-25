@@ -21,6 +21,6 @@ nm -D "${so_path}" | grep -q "nautilus_module_shutdown"
 nm -D "${so_path}" | grep -q "nautilus_module_list_types"
 
 echo "[smoke] checking daemon D-Bus is reachable"
-gdbus introspect --session --dest com.yadisk.Sync1 --object-path /com/yadisk/Sync1 >/dev/null
+gdbus introspect --session --dest me.spaceinbox.yadisk.Sync1 --object-path /me/spaceinbox/yadisk/Sync1 >/dev/null
 
 echo "[smoke] extension + D-Bus checks passed"

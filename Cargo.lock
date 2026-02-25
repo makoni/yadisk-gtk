@@ -3855,6 +3855,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "yadisk-integrations",
  "yadiskd",
  "zbus 5.13.2",
 ]
@@ -3875,6 +3876,7 @@ dependencies = [
  "gobject-sys",
  "thiserror 2.0.18",
  "url",
+ "yadisk-integrations",
  "zbus 5.13.2",
 ]
 
@@ -3907,6 +3909,7 @@ dependencies = [
  "url",
  "wiremock",
  "yadisk-core",
+ "yadisk-integrations",
  "zbus 5.13.2",
 ]
 

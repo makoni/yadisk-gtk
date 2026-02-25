@@ -3,12 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
+use yadisk_integrations::ids::{DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
 use zbus::Message;
 use zbus::blocking::{Connection, Proxy, proxy::SignalIterator};
-
-const DBUS_NAME: &str = "com.yadisk.Sync1";
-const DBUS_PATH: &str = "/com/yadisk/Sync1";
-const DBUS_INTERFACE: &str = "com.yadisk.Sync1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncUiState {
@@ -174,9 +171,9 @@ impl SyncDbusClient {
     fn proxy(&self) -> Result<Proxy<'_>, ExtensionError> {
         Ok(Proxy::new(
             &self.connection,
-            DBUS_NAME,
-            DBUS_PATH,
-            DBUS_INTERFACE,
+            DBUS_NAME_SYNC,
+            DBUS_OBJECT_PATH_SYNC,
+            DBUS_INTERFACE_SYNC,
         )?)
     }
 

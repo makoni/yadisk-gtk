@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use tokio::sync::mpsc;
 use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient, YadiskClient};
+use yadisk_integrations::ids::{DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
 use zbus::connection::Builder as ConnectionBuilder;
 use zbus::object_server::SignalEmitter;
 
@@ -114,9 +115,9 @@ impl DaemonRuntime {
         );
 
         let dbus_connection = ConnectionBuilder::session()?
-            .name("com.yadisk.Sync1")?
+            .name(DBUS_NAME_SYNC)?
             .serve_at(
-                "/com/yadisk/Sync1",
+                DBUS_OBJECT_PATH_SYNC,
                 SyncDbusService::with_engine(Arc::clone(&self.engine)),
             )?
             .build()
@@ -261,7 +262,7 @@ impl DaemonRuntime {
             }
         });
 
-        let signal_emitter = SignalEmitter::new(&dbus_connection, "/com/yadisk/Sync1")
+        let signal_emitter = SignalEmitter::new(&dbus_connection, DBUS_OBJECT_PATH_SYNC)
             .context("failed to create D-Bus signal emitter")?
             .into_owned();
         let engine_for_signals = Arc::clone(&self.engine);

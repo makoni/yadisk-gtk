@@ -9,7 +9,7 @@ jobs:
   sandbox-portal-smoke:
     runs-on: ubuntu-latest
     env:
-      FLATPAK_ID: com.yadisk.Gtk
+      FLATPAK_ID: me.spaceinbox.yadisk.Gtk
       YADISK_ENABLE_SECRET_PORTAL: "1"
     steps:
       - uses: actions/checkout@v4

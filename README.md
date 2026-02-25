@@ -108,7 +108,7 @@ What it provides in Files (Nautilus):
   - `Download Now`
   - `Remove Offline Copy`
   - `Retry Sync`
-- D-Bus actions via `com.yadisk.Sync1` (`Pin`, `Download`, `Evict`, `Retry`)
+- D-Bus actions via `me.spaceinbox.yadisk.Sync1` (`Pin`, `Download`, `Evict`, `Retry`)
 - live status refresh from daemon signals
 
 Optional smoke check:
@@ -209,7 +209,7 @@ The project follows Flatpak-first approach:
 - **OpenURI portal**: OAuth flow opens browser via portal
 - **Host-helper model**: UI in sandbox, daemon/FUSE on host (for Flathub compatibility)
 
-Flatpak manifest: `packaging/flatpak/com.yadisk.Gtk.json`
+Flatpak manifest: `packaging/flatpak/me.spaceinbox.yadisk.Gtk.json`
 
 ## Status
 

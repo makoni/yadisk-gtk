@@ -184,7 +184,7 @@
 ### M) Реализация полноценного демона (осталось сделать)
 - [x] **D-Bus сервис** — запуск zbus сервера в `main.rs` для обработки запросов от интеграций
   - [x] Интегрировать `SyncDbusService` из `dbus_api.rs`
-  - [x] Регистрация D-Bus имени `com.yadisk.Sync1`
+  - [x] Регистрация D-Bus имени `me.spaceinbox.yadisk.Sync1`
   - [x] Обработка методов: Download, Pin, Evict, Retry, GetState, ListConflicts
   - [x] Отправка сигналов: StateChanged, ConflictAdded
 - [x] **Фоновый цикл синхронизации** — бесконечный цикл в daemon'е:
