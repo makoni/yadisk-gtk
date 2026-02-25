@@ -14,6 +14,7 @@ const DBUS_INTERFACE: &str = "com.yadisk.Sync1";
 pub enum SyncUiState {
     CloudOnly,
     Cached,
+    Partial,
     Syncing,
     Error,
 }
@@ -22,6 +23,7 @@ impl SyncUiState {
     pub fn from_dbus(value: &str) -> Self {
         match value {
             "cached" => Self::Cached,
+            "partial" => Self::Partial,
             "syncing" => Self::Syncing,
             "error" => Self::Error,
             _ => Self::CloudOnly,
@@ -32,6 +34,7 @@ impl SyncUiState {
         match self {
             Self::CloudOnly => "cloud_only",
             Self::Cached => "cached",
+            Self::Partial => "partial",
             Self::Syncing => "syncing",
             Self::Error => "error",
         }
@@ -41,6 +44,7 @@ impl SyncUiState {
         match self {
             Self::CloudOnly => "Only in cloud",
             Self::Cached => "Available offline",
+            Self::Partial => "Partially available offline",
             Self::Syncing => "Syncing",
             Self::Error => "Sync error",
         }
@@ -69,7 +73,7 @@ impl NautilusAction {
         match self {
             Self::SaveOffline => "Save Offline",
             Self::RemoveOfflineCopy => "Remove Offline Copy",
-            Self::DownloadNow => "Download Now",
+            Self::DownloadNow => "Download",
             Self::RetrySync => "Retry Sync",
         }
     }
@@ -106,21 +110,26 @@ pub enum SyncSignalEvent {
 
 pub fn emblem_for_state(state: SyncUiState) -> &'static str {
     match state {
-        SyncUiState::CloudOnly => "emblem-default-symbolic",
-        SyncUiState::Cached => "emblem-ok-symbolic",
-        SyncUiState::Syncing => "emblem-synchronizing-symbolic",
-        SyncUiState::Error => "emblem-important-symbolic",
+        SyncUiState::CloudOnly => "cloud-outline-thin-symbolic",
+        SyncUiState::Cached => "check-round-outline-symbolic",
+        SyncUiState::Partial => "cloud-outline-thin-symbolic",
+        SyncUiState::Syncing => "update-symbolic",
+        SyncUiState::Error => "dialog-error-symbolic",
     }
 }
 
 pub fn visible_actions_for_state(state: SyncUiState) -> Vec<NautilusAction> {
     match state {
-        SyncUiState::CloudOnly => {
-            vec![NautilusAction::SaveOffline, NautilusAction::DownloadNow]
+        SyncUiState::CloudOnly => vec![NautilusAction::DownloadNow],
+        SyncUiState::Partial => {
+            vec![
+                NautilusAction::DownloadNow,
+                NautilusAction::RemoveOfflineCopy,
+            ]
         }
         SyncUiState::Cached => vec![NautilusAction::RemoveOfflineCopy, NautilusAction::RetrySync],
         SyncUiState::Syncing => vec![NautilusAction::RetrySync],
-        SyncUiState::Error => vec![NautilusAction::RetrySync, NautilusAction::SaveOffline],
+        SyncUiState::Error => vec![NautilusAction::RetrySync, NautilusAction::DownloadNow],
     }
 }
 
@@ -422,11 +431,6 @@ mod nautilus_plugin {
     }
 
     #[repr(C)]
-    struct NautilusMenu {
-        _private: [u8; 0],
-    }
-
-    #[repr(C)]
     struct NautilusMenuItem {
         _private: [u8; 0],
     }
@@ -509,15 +513,12 @@ mod nautilus_plugin {
         fn nautilus_file_info_invalidate_extension_info(file_info: *mut NautilusFileInfo);
         fn nautilus_file_info_lookup_for_uri(uri: *const c_char) -> *mut NautilusFileInfo;
 
-        fn nautilus_menu_new() -> *mut NautilusMenu;
-        fn nautilus_menu_append_item(menu: *mut NautilusMenu, item: *mut NautilusMenuItem);
         fn nautilus_menu_item_new(
             name: *const c_char,
             label: *const c_char,
             tip: *const c_char,
             icon: *const c_char,
         ) -> *mut NautilusMenuItem;
-        fn nautilus_menu_item_set_submenu(item: *mut NautilusMenuItem, menu: *mut NautilusMenu);
     }
 
     #[derive(Clone)]
@@ -680,26 +681,13 @@ mod nautilus_plugin {
         _provider: *mut NautilusMenuProvider,
         files: *mut GList,
     ) -> *mut GList {
-        if let Ok(mut contexts) = action_contexts().lock() {
-            contexts.clear();
-        }
-
         let local_paths = file_infos_to_local_paths(files);
         if local_paths.is_empty() {
             return ptr::null_mut();
         }
 
         let state = state_for_local_path(&local_paths[0]).unwrap_or(SyncUiState::CloudOnly);
-        let root_item = create_menu_item("YadiskRust::root", "Yandex Disk", "Yandex Disk actions");
-        if root_item.is_null() {
-            return ptr::null_mut();
-        }
-
-        let submenu = nautilus_menu_new();
-        if submenu.is_null() {
-            return ptr::null_mut();
-        }
-
+        let mut items: *mut GList = ptr::null_mut();
         for spec in menu_for_state(state) {
             let item = create_menu_item(
                 &format!("YadiskRust::{}", spec.id),
@@ -710,13 +698,8 @@ mod nautilus_plugin {
                 continue;
             }
             attach_action_context(item, spec.action, &local_paths);
-            nautilus_menu_append_item(submenu, item);
+            items = g_list_append(items, item as gpointer);
         }
-
-        nautilus_menu_item_set_submenu(root_item, submenu);
-
-        let mut items: *mut GList = ptr::null_mut();
-        items = g_list_append(items, root_item as gpointer);
         items
     }
 
@@ -743,6 +726,9 @@ mod nautilus_plugin {
         }
 
         if let Ok(mut contexts) = action_contexts().lock() {
+            if contexts.len() > 8192 {
+                contexts.clear();
+            }
             contexts.insert(
                 item as usize,
                 ActionContext {
@@ -779,15 +765,18 @@ mod nautilus_plugin {
     unsafe extern "C" fn menu_item_activate_cb(item: *mut NautilusMenuItem, _user_data: gpointer) {
         let context = {
             let Ok(contexts) = action_contexts().lock() else {
+                eprintln!("[yadisk-nautilus] action context lock failed");
                 return;
             };
             contexts.get(&(item as usize)).cloned()
         };
         let Some(context) = context else {
+            eprintln!("[yadisk-nautilus] action context not found");
             return;
         };
 
         let Some(client) = dbus_client().cloned() else {
+            eprintln!("[yadisk-nautilus] dbus client unavailable");
             return;
         };
 
@@ -795,8 +784,21 @@ mod nautilus_plugin {
             let Ok(candidates) = map_local_to_remote_candidates(&local_path, sync_root()) else {
                 continue;
             };
+            eprintln!(
+                "[yadisk-nautilus] action {:?} request for {}",
+                context.action,
+                local_path.display()
+            );
             match client.perform_action_with_fallback(&candidates, context.action) {
-                Ok(_) => invalidate_file_info_for_local_path(&local_path),
+                Ok(_) => {
+                    eprintln!(
+                        "[yadisk-nautilus] action {:?} queued for {}",
+                        context.action,
+                        local_path.display()
+                    );
+                    invalidate_file_info_for_local_path(&local_path);
+                    invalidate_parent_info_for_local_path(&local_path);
+                }
                 Err(err) => eprintln!(
                     "[yadisk-nautilus] action {:?} failed for {}: {}",
                     context.action,
@@ -888,6 +890,15 @@ mod nautilus_plugin {
 
     fn state_for_local_path(local_path: &Path) -> Result<SyncUiState, ExtensionError> {
         let candidates = map_local_to_remote_candidates(local_path, sync_root())?;
+        let client = dbus_client().ok_or(ExtensionError::Dbus(zbus::Error::Failure(
+            "D-Bus unavailable".into(),
+        )))?;
+
+        if let Ok(state) = client.get_state_with_fallback(&candidates) {
+            cache_state(&candidates[0], state);
+            cache_state(&candidates[1], state);
+            return Ok(state);
+        }
 
         if let Ok(cache) = state_cache().read() {
             for candidate in &candidates {
@@ -896,16 +907,7 @@ mod nautilus_plugin {
                 }
             }
         }
-
-        let client = dbus_client().ok_or(ExtensionError::Dbus(zbus::Error::Failure(
-            "D-Bus unavailable".into(),
-        )))?;
-        let state = client.get_state_with_fallback(&candidates)?;
-
-        cache_state(&candidates[0], state);
-        cache_state(&candidates[1], state);
-
-        Ok(state)
+        client.get_state_with_fallback(&candidates)
     }
 
     fn invalidate_file_info_for_local_path(local_path: &Path) {
@@ -926,6 +928,13 @@ mod nautilus_plugin {
         }
     }
 
+    fn invalidate_parent_info_for_local_path(local_path: &Path) {
+        let Some(parent) = local_path.parent() else {
+            return;
+        };
+        invalidate_file_info_for_local_path(parent);
+    }
+
     fn start_signal_thread_once() {
         START_SIGNAL_THREAD.call_once(|| {
             let Some(client) = dbus_client().cloned() else {
@@ -943,7 +952,13 @@ mod nautilus_plugin {
                         SyncSignalEvent::StateChanged { path, state } => {
                             cache_state(&path, state);
                             let local_path = map_remote_to_local_path(&path, sync_root());
+                            eprintln!(
+                                "[yadisk-nautilus] state changed: path={} state={}",
+                                path,
+                                state.as_dbus()
+                            );
                             invalidate_file_info_for_local_path(&local_path);
+                            invalidate_parent_info_for_local_path(&local_path);
                         }
                         SyncSignalEvent::ConflictAdded { .. } => {}
                     }
@@ -961,11 +976,18 @@ mod tests {
     fn maps_state_to_emblem_and_actions() {
         assert_eq!(
             emblem_for_state(SyncUiState::CloudOnly),
-            "emblem-default-symbolic"
+            "cloud-outline-thin-symbolic"
         );
         assert_eq!(
             visible_actions_for_state(SyncUiState::CloudOnly),
-            vec![NautilusAction::SaveOffline, NautilusAction::DownloadNow]
+            vec![NautilusAction::DownloadNow]
+        );
+        assert_eq!(
+            visible_actions_for_state(SyncUiState::Partial),
+            vec![
+                NautilusAction::DownloadNow,
+                NautilusAction::RemoveOfflineCopy
+            ]
         );
         assert_eq!(
             visible_actions_for_state(SyncUiState::Cached),
@@ -975,7 +997,11 @@ mod tests {
             menu_for_state(SyncUiState::CloudOnly)
                 .first()
                 .map(|item| item.label),
-            Some("Save Offline")
+            Some("Download")
+        );
+        assert_eq!(
+            emblem_for_state(SyncUiState::Partial),
+            "cloud-outline-thin-symbolic"
         );
     }
 
@@ -1006,6 +1032,16 @@ mod tests {
         assert_eq!(
             map_remote_to_local_path("/Docs/B.txt", &sync_root),
             PathBuf::from("/home/user/Yandex Disk/Docs/B.txt")
+        );
+    }
+
+    #[test]
+    fn parses_partial_state_from_dbus() {
+        assert_eq!(SyncUiState::from_dbus("partial"), SyncUiState::Partial);
+        assert_eq!(SyncUiState::Partial.as_dbus(), "partial");
+        assert_eq!(
+            SyncUiState::Partial.badge_label(),
+            "Partially available offline"
         );
     }
 }

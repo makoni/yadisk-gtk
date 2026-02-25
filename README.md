@@ -69,6 +69,26 @@ export YADISK_CLIENT_SECRET=<client_secret>
 cargo run -p yadiskd
 ```
 
+### GNOME status tray icon (indicator)
+
+`yadiskd` now starts a status tray indicator (StatusNotifier/AppIndicator) with one menu action: `Quit`.
+
+- states:
+  - `normal` → everything synchronized
+  - `syncing` → sync in progress
+  - `error` → sync failed
+- icons are loaded from `yadiskd/assets/status/` (`normal.svg`, `syncing.svg`, `error.svg`)
+
+Optional env:
+
+```bash
+# disable tray icon
+export YADISK_DISABLE_STATUS_TRAY=1
+
+# override icon directory
+export YADISK_STATUS_ICON_DIR=/path/to/status/icons
+```
+
 ## Native Nautilus extension (Rust, GNOME 49 baseline)
 
 Install host extension:

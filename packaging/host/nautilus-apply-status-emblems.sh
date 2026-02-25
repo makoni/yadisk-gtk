@@ -31,10 +31,11 @@ fetch_state() {
 
 state_to_emblem() {
   case "$1" in
-    cloud_only) printf '%s' "emblem-default-symbolic" ;;
-    cached) printf '%s' "emblem-ok-symbolic" ;;
-    syncing) printf '%s' "emblem-synchronizing-symbolic" ;;
-    error) printf '%s' "emblem-important-symbolic" ;;
+    cloud_only) printf '%s' "cloud-outline-thin-symbolic" ;;
+    cached) printf '%s' "check-round-outline-symbolic" ;;
+    partial) printf '%s' "cloud-outline-thin-symbolic" ;;
+    syncing) printf '%s' "update-symbolic" ;;
+    error) printf '%s' "dialog-error-symbolic" ;;
     *) printf '%s' "" ;;
   esac
 }

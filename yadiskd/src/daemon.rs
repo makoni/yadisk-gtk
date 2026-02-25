@@ -16,6 +16,7 @@ use crate::sync::engine::SyncEngine;
 use crate::sync::index::{FileState, IndexStore};
 use crate::sync::local_watcher::{LocalEvent, start_notify_watcher};
 use crate::token_provider::TokenProvider;
+use crate::tray::{TraySyncState, start_status_tray};
 
 const DEFAULT_SYNC_DIR_NAME: &str = "Yandex Disk";
 const DEFAULT_REMOTE_ROOT: &str = "disk:/";
@@ -122,6 +123,24 @@ impl DaemonRuntime {
             .await
             .context("failed to start D-Bus object server")?;
 
+        let (quit_tx, mut quit_rx) = mpsc::unbounded_channel::<()>();
+        let (tray_state_tx, mut tray_state_rx) = mpsc::unbounded_channel::<TraySyncState>();
+        let tray_controller = match start_status_tray(quit_tx.clone()) {
+            Ok(controller) => controller,
+            Err(err) => {
+                eprintln!("[yadiskd] warning: failed to start status tray: {err}");
+                None
+            }
+        };
+        let tray_handle = tray_controller.map(|controller| {
+            tokio::spawn(async move {
+                while let Some(state) = tray_state_rx.recv().await {
+                    controller.update(state);
+                }
+            })
+        });
+        let _ = tray_state_tx.send(TraySyncState::Syncing);
+
         let (watcher, mut local_rx): (
             Option<notify::RecommendedWatcher>,
             Option<mpsc::UnboundedReceiver<LocalEvent>>,
@@ -140,14 +159,25 @@ impl DaemonRuntime {
         let engine_for_cloud = Arc::clone(&self.engine);
         let remote_root = self.config.remote_root.clone();
         let cloud_poll_interval = self.config.cloud_poll_interval;
+        let tray_state_tx_cloud = tray_state_tx.clone();
         let cloud_handle = tokio::spawn(async move {
             loop {
                 match engine_for_cloud
                     .sync_directory_incremental(&remote_root)
                     .await
                 {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("[yadiskd] cloud sync error: {err}"),
+                    Ok(delta) => {
+                        if delta.indexed > 0 || delta.deleted > 0 || delta.enqueued_downloads > 0 {
+                            eprintln!(
+                                "[yadiskd] cloud delta: indexed={}, deleted={}, enqueued_downloads={}",
+                                delta.indexed, delta.deleted, delta.enqueued_downloads
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("[yadiskd] cloud sync error: {err}");
+                        let _ = tray_state_tx_cloud.send(TraySyncState::Error);
+                    }
                 }
                 tokio::time::sleep(cloud_poll_interval).await;
             }
@@ -155,9 +185,20 @@ impl DaemonRuntime {
 
         let engine_for_worker = Arc::clone(&self.engine);
         let worker_interval = self.config.worker_interval;
+        let tray_state_tx_worker = tray_state_tx.clone();
         let worker_handle = tokio::spawn(async move {
             loop {
-                let _ = engine_for_worker.run_once().await;
+                match engine_for_worker.run_once().await {
+                    Ok(true) => {
+                        eprintln!("[yadiskd] worker: processed queued operation");
+                        let _ = tray_state_tx_worker.send(TraySyncState::Syncing);
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!("[yadiskd] worker error: {err}");
+                        let _ = tray_state_tx_worker.send(TraySyncState::Error);
+                    }
+                }
                 tokio::time::sleep(worker_interval).await;
             }
         });
@@ -225,8 +266,10 @@ impl DaemonRuntime {
             .into_owned();
         let engine_for_signals = Arc::clone(&self.engine);
         let signal_root = self.config.remote_root.clone();
+        let tray_state_tx_signal = tray_state_tx.clone();
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
+            let mut known_tray_state: Option<TraySyncState> = None;
             let mut last_conflict_id = 0i64;
 
             loop {
@@ -250,7 +293,14 @@ impl DaemonRuntime {
                                     .await;
                         }
                     }
+                    let tray_state = tray_state_from_states(&current_states);
+                    if known_tray_state != Some(tray_state) {
+                        let _ = tray_state_tx_signal.send(tray_state);
+                        known_tray_state = Some(tray_state);
+                    }
                     known_states = current_states;
+                } else {
+                    let _ = tray_state_tx_signal.send(TraySyncState::Error);
                 }
 
                 if let Ok(conflicts) = engine_for_signals.list_conflicts().await {
@@ -277,7 +327,10 @@ impl DaemonRuntime {
             let engine_for_local = Arc::clone(&self.engine);
             Some(tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    let _ = engine_for_local.ingest_local_event(event).await;
+                    eprintln!("[yadiskd] local event: {:?}", event);
+                    if let Err(err) = engine_for_local.ingest_local_event(event).await {
+                        eprintln!("[yadiskd] local ingest error: {err}");
+                    }
                 }
             }))
         } else {
@@ -285,9 +338,14 @@ impl DaemonRuntime {
         };
 
         let _watcher = watcher;
-        tokio::signal::ctrl_c()
-            .await
-            .context("failed waiting for shutdown signal")?;
+        tokio::select! {
+            res = tokio::signal::ctrl_c() => {
+                res.context("failed waiting for shutdown signal")?;
+            }
+            _ = quit_rx.recv() => {
+                eprintln!("[yadiskd] quit requested from status tray");
+            }
+        }
 
         cloud_handle.abort();
         worker_handle.abort();
@@ -297,8 +355,28 @@ impl DaemonRuntime {
         if let Some(handle) = local_handle {
             handle.abort();
         }
+        if let Some(handle) = tray_handle {
+            handle.abort();
+        }
 
         Ok(())
+    }
+}
+
+fn tray_state_from_states(states: &HashMap<String, &'static str>) -> TraySyncState {
+    let mut has_syncing = false;
+    for state in states.values() {
+        if *state == "error" {
+            return TraySyncState::Error;
+        }
+        if *state == "syncing" {
+            has_syncing = true;
+        }
+    }
+    if has_syncing {
+        TraySyncState::Syncing
+    } else {
+        TraySyncState::Normal
     }
 }
 
@@ -619,6 +697,21 @@ mod tests {
     fn detects_enosys_in_error_chain() {
         let err = anyhow::Error::new(std::io::Error::from_raw_os_error(38));
         assert!(error_contains_enosys(&err));
+    }
+
+    #[test]
+    fn tray_state_prioritizes_error_then_syncing() {
+        let mut states = HashMap::new();
+        assert_eq!(tray_state_from_states(&states), TraySyncState::Normal);
+
+        states.insert("/A".to_string(), "syncing");
+        assert_eq!(tray_state_from_states(&states), TraySyncState::Syncing);
+
+        states.insert("/B".to_string(), "cached");
+        assert_eq!(tray_state_from_states(&states), TraySyncState::Syncing);
+
+        states.insert("/C".to_string(), "error");
+        assert_eq!(tray_state_from_states(&states), TraySyncState::Error);
     }
 
     #[tokio::test]

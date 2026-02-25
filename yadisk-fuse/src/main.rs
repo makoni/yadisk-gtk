@@ -204,35 +204,62 @@ mod app {
 
         fn ensure_downloaded(&self, path: &str) {
             let remote = Self::normalize_remote(path);
-            let state = self
-                .rt
-                .block_on(async {
-                    let item = self.index.get_item_by_path(&remote).await?;
-                    if let Some(item) = item {
-                        let state = self.index.get_state(item.id).await?;
-                        Ok::<Option<FileState>, yadiskd::sync::index::IndexError>(
-                            state.map(|s| s.state),
-                        )
-                    } else {
-                        Ok(None)
-                    }
-                })
-                .ok()
-                .flatten();
-            if !matches!(state, Some(FileState::CloudOnly)) {
-                return;
-            }
-            let _ = self.downloader.download(&remote);
             let cache_path = match cache_path_for(&self.cache_root, &remote) {
                 Ok(path) => path,
                 Err(_) => return,
             };
+            let mut state = self.current_state_for_remote_path(&remote);
+            if matches!(state, Some(FileState::Cached)) && std::fs::metadata(&cache_path).is_ok() {
+                return;
+            }
+            eprintln!("[yadisk-fuse] on-demand download requested: {remote}");
+            let _ = self.downloader.download(&remote);
             for _ in 0..150 {
-                if std::fs::metadata(&cache_path).is_ok() {
+                state = self.current_state_for_remote_path(&remote);
+                let cache_exists = std::fs::metadata(&cache_path).is_ok();
+                if matches!(state, Some(FileState::Cached)) && cache_exists {
+                    eprintln!("[yadisk-fuse] on-demand download completed: {remote}");
+                    return;
+                }
+                if matches!(state, Some(FileState::Error)) {
+                    eprintln!("[yadisk-fuse] on-demand download failed: {remote}");
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }
+            eprintln!("[yadisk-fuse] on-demand download timeout: {remote}");
+        }
+
+        fn current_state_for_remote_path(&self, remote: &str) -> Option<FileState> {
+            let mut candidates = vec![remote.to_string()];
+            if let Some(stripped) = remote.strip_prefix("disk:") {
+                candidates.push(stripped.to_string());
+            } else if remote.starts_with('/') {
+                candidates.push(format!("disk:{remote}"));
+            }
+
+            for candidate in candidates {
+                let state = self
+                    .rt
+                    .block_on(async {
+                        let item = self.index.get_item_by_path(&candidate).await?;
+                        if let Some(item) = item {
+                            let state = self.index.get_state(item.id).await?;
+                            Ok::<Option<FileState>, yadiskd::sync::index::IndexError>(
+                                state.map(|s| s.state),
+                            )
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .ok()
+                    .flatten();
+                if state.is_some() {
+                    return state;
+                }
+            }
+
+            None
         }
     }
 

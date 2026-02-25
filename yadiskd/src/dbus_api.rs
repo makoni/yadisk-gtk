@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 use zbus::{interface, object_server::SignalEmitter};
 
 use crate::sync::engine::EngineError;
+use crate::sync::engine::PathDisplayState;
 use crate::sync::engine::SyncEngine;
-use crate::sync::index::FileState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathState {
@@ -17,6 +17,7 @@ pub enum PathState {
     Cached,
     Syncing,
     Error,
+    Partial,
 }
 
 impl PathState {
@@ -26,6 +27,7 @@ impl PathState {
             PathState::Cached => "cached",
             PathState::Syncing => "syncing",
             PathState::Error => "error",
+            PathState::Partial => "partial",
         }
     }
 }
@@ -114,12 +116,13 @@ impl SyncDbusService {
         Ok([slash, disk])
     }
 
-    fn from_file_state(state: FileState) -> PathState {
+    fn from_path_display_state(state: PathDisplayState) -> PathState {
         match state {
-            FileState::CloudOnly => PathState::CloudOnly,
-            FileState::Cached => PathState::Cached,
-            FileState::Syncing => PathState::Syncing,
-            FileState::Error => PathState::Error,
+            PathDisplayState::CloudOnly => PathState::CloudOnly,
+            PathDisplayState::Cached => PathState::Cached,
+            PathDisplayState::Syncing => PathState::Syncing,
+            PathDisplayState::Error => PathState::Error,
+            PathDisplayState::Partial => PathState::Partial,
         }
     }
 }
@@ -135,10 +138,14 @@ fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
 impl SyncDbusService {
     async fn download(&self, path: &str) -> zbus::fdo::Result<()> {
         let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        eprintln!("[yadiskd] dbus Download path={path}");
         if let Some(engine) = &self.backend {
             for candidate in [&slash, &disk] {
                 match engine.enqueue_download(candidate).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => {
+                        eprintln!("[yadiskd] dbus Download queued path={candidate}");
+                        return Ok(());
+                    }
                     Err(EngineError::MissingItem(_)) => continue,
                     Err(err) => return Err(map_engine_error(err)),
                 }
@@ -151,10 +158,14 @@ impl SyncDbusService {
 
     async fn pin(&self, path: &str, pin: bool) -> zbus::fdo::Result<()> {
         let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        eprintln!("[yadiskd] dbus Pin path={path} pin={pin}");
         if let Some(engine) = &self.backend {
             for candidate in [&slash, &disk] {
                 match engine.pin_path(candidate, pin).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => {
+                        eprintln!("[yadiskd] dbus Pin updated path={candidate} pin={pin}");
+                        return Ok(());
+                    }
                     Err(EngineError::MissingItem(_)) => continue,
                     Err(err) => return Err(map_engine_error(err)),
                 }
@@ -167,10 +178,14 @@ impl SyncDbusService {
 
     async fn evict(&self, path: &str) -> zbus::fdo::Result<()> {
         let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        eprintln!("[yadiskd] dbus Evict path={path}");
         if let Some(engine) = &self.backend {
             for candidate in [&slash, &disk] {
                 match engine.evict_path(candidate).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => {
+                        eprintln!("[yadiskd] dbus Evict done path={candidate}");
+                        return Ok(());
+                    }
                     Err(EngineError::MissingItem(_)) => continue,
                     Err(err) => return Err(map_engine_error(err)),
                 }
@@ -186,10 +201,14 @@ impl SyncDbusService {
 
     async fn retry(&self, path: &str) -> zbus::fdo::Result<()> {
         let [slash, disk] = Self::path_candidates(path).map_err(map_to_fdo)?;
+        eprintln!("[yadiskd] dbus Retry path={path}");
         if let Some(engine) = &self.backend {
             for candidate in [&slash, &disk] {
                 match engine.retry_path(candidate).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => {
+                        eprintln!("[yadiskd] dbus Retry queued path={candidate}");
+                        return Ok(());
+                    }
                     Err(EngineError::MissingItem(_)) => continue,
                     Err(err) => return Err(map_engine_error(err)),
                 }
@@ -209,7 +228,7 @@ impl SyncDbusService {
                     .await
                     .map_err(map_engine_error)?
                 {
-                    return Ok(Self::from_file_state(state).as_str().to_string());
+                    return Ok(Self::from_path_display_state(state).as_str().to_string());
                 }
             }
             return Err(map_to_fdo(DbusServiceError::NotFound));
@@ -306,5 +325,17 @@ mod tests {
         service.download("disk:/Docs/A.txt").await.unwrap();
         let state = service.get_state("disk:/Docs/A.txt").await.unwrap();
         assert_eq!(state, "syncing");
+    }
+
+    #[tokio::test]
+    async fn get_state_supports_partial_value() {
+        let service = SyncDbusService::default();
+        service
+            .states
+            .write()
+            .await
+            .insert("/Docs".to_string(), PathState::Partial);
+        let state = service.get_state("/Docs").await.unwrap();
+        assert_eq!(state, "partial");
     }
 }

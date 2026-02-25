@@ -29,6 +29,8 @@ pub enum EngineError {
     Transfer(#[from] TransferError),
     #[error("path error: {0}")]
     Path(#[from] PathError),
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("time parse error: {0}")]
     Time(#[from] time::error::Parse),
     #[error("item not found for path: {0}")]
@@ -46,6 +48,26 @@ pub struct SyncEngine {
 }
 
 const MAX_RETRY_ATTEMPTS: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathDisplayState {
+    CloudOnly,
+    Cached,
+    Syncing,
+    Error,
+    Partial,
+}
+
+impl PathDisplayState {
+    fn from_file_state(state: FileState) -> Self {
+        match state {
+            FileState::CloudOnly => Self::CloudOnly,
+            FileState::Cached => Self::Cached,
+            FileState::Syncing => Self::Syncing,
+            FileState::Error => Self::Error,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncDelta {
@@ -312,15 +334,25 @@ impl SyncEngine {
             .get_item_by_path(path)
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
-        let state = self.index.get_state(item.id).await?;
-        let current_state = state
-            .as_ref()
-            .map(|row| row.state.clone())
-            .unwrap_or(FileState::CloudOnly);
-        let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
-        self.index
-            .set_state(item.id, current_state, pinned, last_error)
-            .await?;
+        let mut targets = vec![item];
+        if targets[0].item_type == ItemType::Dir {
+            for descendant in self.index.list_items_by_prefix(path).await? {
+                if descendant.id != targets[0].id {
+                    targets.push(descendant);
+                }
+            }
+        }
+        for target in targets {
+            let state = self.index.get_state(target.id).await?;
+            let current_state = state
+                .as_ref()
+                .map(|row| row.state.clone())
+                .unwrap_or(FileState::CloudOnly);
+            let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
+            self.index
+                .set_state(target.id, current_state, pinned, last_error)
+                .await?;
+        }
         Ok(())
     }
 
@@ -330,9 +362,27 @@ impl SyncEngine {
             .get_item_by_path(path)
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
-        self.index
-            .set_state(item.id, FileState::CloudOnly, false, None)
-            .await?;
+        let mut targets = vec![item];
+        if targets[0].item_type == ItemType::Dir {
+            for descendant in self.index.list_items_by_prefix(path).await? {
+                if descendant.id != targets[0].id {
+                    targets.push(descendant);
+                }
+            }
+        }
+        for target in targets {
+            self.index
+                .set_state(target.id, FileState::CloudOnly, false, None)
+                .await?;
+        }
+        let cache_path = cache_path_for(&self.cache_root, path)?;
+        if let Ok(meta) = tokio::fs::metadata(&cache_path).await {
+            if meta.is_dir() {
+                let _ = tokio::fs::remove_dir_all(&cache_path).await;
+            } else {
+                let _ = tokio::fs::remove_file(&cache_path).await;
+            }
+        }
         Ok(())
     }
 
@@ -341,15 +391,74 @@ impl SyncEngine {
         Ok(())
     }
 
-    pub async fn state_for_path(&self, path: &str) -> Result<Option<FileState>, EngineError> {
+    pub async fn state_for_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<PathDisplayState>, EngineError> {
         let Some(item) = self.index.get_item_by_path(path).await? else {
             return Ok(None);
         };
-        Ok(self
+        if item.item_type == ItemType::File {
+            let state = self
+                .index
+                .get_state(item.id)
+                .await?
+                .map(|state| state.state)
+                .unwrap_or(FileState::CloudOnly);
+            return Ok(Some(PathDisplayState::from_file_state(state)));
+        }
+
+        let descendants = self.index.list_items_by_prefix(path).await?;
+        let states: HashMap<_, _> = self
             .index
-            .get_state(item.id)
+            .list_states_by_prefix(path)
             .await?
-            .map(|state| state.state))
+            .into_iter()
+            .collect();
+
+        let mut has_file = false;
+        let mut has_cloud = false;
+        let mut has_cached = false;
+        let mut has_syncing = false;
+        let mut has_error = false;
+
+        for descendant in descendants {
+            if descendant.item_type != ItemType::File {
+                continue;
+            }
+            has_file = true;
+            let state =
+                state_for_path_variant(&states, &descendant.path).unwrap_or(FileState::CloudOnly);
+            match state {
+                FileState::CloudOnly => has_cloud = true,
+                FileState::Cached => has_cached = true,
+                FileState::Syncing => has_syncing = true,
+                FileState::Error => has_error = true,
+            }
+        }
+
+        if !has_file {
+            let own = self
+                .index
+                .get_state(item.id)
+                .await?
+                .map(|state| state.state)
+                .unwrap_or(FileState::CloudOnly);
+            return Ok(Some(PathDisplayState::from_file_state(own)));
+        }
+        if has_error {
+            return Ok(Some(PathDisplayState::Error));
+        }
+        if has_syncing {
+            return Ok(Some(PathDisplayState::Syncing));
+        }
+        if has_cached && has_cloud {
+            return Ok(Some(PathDisplayState::Partial));
+        }
+        if has_cached {
+            return Ok(Some(PathDisplayState::Cached));
+        }
+        Ok(Some(PathDisplayState::CloudOnly))
     }
 
     pub async fn list_conflicts(&self) -> Result<Vec<ConflictRecord>, EngineError> {
@@ -397,6 +506,7 @@ impl SyncEngine {
         let Some(op) = self.index.dequeue_op().await? else {
             return Ok(false);
         };
+        eprintln!("[yadiskd] op start: kind={:?} path={}", op.kind, op.path);
 
         let result = match op.kind.clone() {
             OperationKind::Download => self.execute_download(&op.path).await,
@@ -415,6 +525,10 @@ impl SyncEngine {
         if let Err(err) = result {
             if is_transient_error(&err) {
                 if op.attempt.saturating_add(1) >= MAX_RETRY_ATTEMPTS {
+                    eprintln!(
+                        "[yadiskd] op failed permanently after retries: kind={:?} path={} err={}",
+                        op.kind, op.path, err
+                    );
                     return Err(err);
                 }
                 let retry_after =
@@ -422,11 +536,23 @@ impl SyncEngine {
                 self.index
                     .requeue_op(&op, retry_after, Some(&err.to_string()))
                     .await?;
+                eprintln!(
+                    "[yadiskd] op requeued: kind={:?} path={} attempt={} retry_at={}",
+                    op.kind,
+                    op.path,
+                    op.attempt.saturating_add(1),
+                    retry_after
+                );
                 return Ok(true);
             }
+            eprintln!(
+                "[yadiskd] op failed: kind={:?} path={} err={}",
+                op.kind, op.path, err
+            );
             return Err(err);
         }
 
+        eprintln!("[yadiskd] op done: kind={:?} path={}", op.kind, op.path);
         Ok(true)
     }
 
@@ -436,6 +562,52 @@ impl SyncEngine {
             .get_item_by_path(path)
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+
+        if item.item_type == ItemType::Dir {
+            self.ensure_cache_dir_for_remote(path).await?;
+            let descendants = self.index.list_items_by_prefix(path).await?;
+            for descendant in descendants {
+                if descendant.item_type == ItemType::Dir {
+                    self.ensure_cache_dir_for_remote(&descendant.path).await?;
+                    self.index
+                        .set_state_with_meta(
+                            descendant.id,
+                            FileState::Cached,
+                            true,
+                            None,
+                            StateMeta {
+                                retry_at: None,
+                                last_success_at: Some(now_unix()),
+                                last_error_at: None,
+                                dirty: false,
+                            },
+                        )
+                        .await?;
+                    continue;
+                }
+
+                let state = self.index.get_state(descendant.id).await?;
+                let current_state = state
+                    .as_ref()
+                    .map(|row| row.state.clone())
+                    .unwrap_or(FileState::CloudOnly);
+                let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
+                let should_enqueue =
+                    !matches!(&current_state, FileState::Cached | FileState::Syncing);
+                self.index
+                    .set_state(descendant.id, current_state, true, last_error)
+                    .await?;
+                if should_enqueue {
+                    self.enqueue_download(&descendant.path).await?;
+                }
+            }
+            return Ok(());
+        }
+
+        if let Some(parent) = parent_path(path) {
+            self.ensure_cache_dir_for_remote(&parent).await?;
+        }
+
         let link = self.client.get_download_link(path).await?;
         let target = cache_path_for(&self.cache_root, path)?;
         self.transfer
@@ -456,6 +628,17 @@ impl SyncEngine {
                 },
             )
             .await?;
+        Ok(())
+    }
+
+    async fn ensure_cache_dir_for_remote(&self, path: &str) -> Result<(), EngineError> {
+        let local = cache_path_for(&self.cache_root, path)?;
+        if let Ok(meta) = tokio::fs::metadata(&local).await
+            && meta.is_file()
+        {
+            tokio::fs::remove_file(&local).await?;
+        }
+        tokio::fs::create_dir_all(&local).await?;
         Ok(())
     }
 
@@ -601,6 +784,21 @@ fn parent_path(path: &str) -> Option<String> {
     })
 }
 
+fn state_for_path_variant(states: &HashMap<String, FileState>, path: &str) -> Option<FileState> {
+    if let Some(state) = states.get(path) {
+        return Some(state.clone());
+    }
+    if let Some(rest) = path.strip_prefix("disk:/") {
+        let slash = format!("/{}", rest.trim_start_matches('/'));
+        return states.get(&slash).cloned();
+    }
+    if let Some(rest) = path.strip_prefix('/') {
+        let disk = format!("disk:/{}", rest);
+        return states.get(&disk).cloned();
+    }
+    None
+}
+
 fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -615,7 +813,8 @@ fn is_transient_error(err: &EngineError) -> bool {
             api.classification(),
             Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)
         ),
-        EngineError::Transfer(TransferError::Request(_))
+        EngineError::Io(_)
+        | EngineError::Transfer(TransferError::Request(_))
         | EngineError::Transfer(TransferError::Io(_))
         | EngineError::Transfer(TransferError::ConcurrencyClosed)
         | EngineError::OperationFailed => true,
@@ -738,6 +937,546 @@ mod tests {
             .unwrap();
         let state = engine.index.get_state(item.id).await.unwrap().unwrap();
         assert_eq!(state.state, FileState::Cached);
+    }
+
+    #[tokio::test]
+    async fn run_once_download_on_directory_queues_child_files_and_repairs_cache_dir() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let music_dir = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let song_a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let _sub_dir = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/Sub".into(),
+                parent_path: Some("/Music".into()),
+                name: "Sub".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let song_b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/Sub/B.mp3".into(),
+                parent_path: Some("/Music/Sub".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+
+        let broken_cache = cache_path_for(dir.path(), "/Music").unwrap();
+        std::fs::write(&broken_cache, b"broken-file-instead-of-dir").unwrap();
+
+        engine.enqueue_download("/Music").await.unwrap();
+        assert!(engine.run_once().await.unwrap());
+
+        assert!(std::fs::metadata(&broken_cache).unwrap().is_dir());
+
+        let dir_state = engine.index.get_state(music_dir.id).await.unwrap().unwrap();
+        assert_eq!(dir_state.state, FileState::Cached);
+        assert!(dir_state.pinned);
+
+        let state_a = engine.index.get_state(song_a.id).await.unwrap().unwrap();
+        assert_eq!(state_a.state, FileState::Syncing);
+        assert!(state_a.pinned);
+
+        let state_b = engine.index.get_state(song_b.id).await.unwrap().unwrap();
+        assert_eq!(state_b.state, FileState::Syncing);
+        assert!(state_b.pinned);
+
+        let op1 = engine.index.dequeue_op().await.unwrap().unwrap();
+        let op2 = engine.index.dequeue_op().await.unwrap().unwrap();
+        let queued: HashSet<String> = [op1.path, op2.path].into_iter().collect();
+        assert_eq!(
+            queued,
+            HashSet::from(["/Music/A.mp3".to_string(), "/Music/Sub/B.mp3".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn evict_directory_applies_recursively_and_removes_cache_tree() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let music = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/B.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(music.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(a.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(b.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+
+        let cache_root = cache_path_for(dir.path(), "/Music").unwrap();
+        std::fs::create_dir_all(&cache_root).unwrap();
+        std::fs::write(cache_root.join("A.mp3"), b"a").unwrap();
+        std::fs::write(cache_root.join("B.mp3"), b"b").unwrap();
+
+        engine.evict_path("/Music").await.unwrap();
+
+        let s_music = engine.index.get_state(music.id).await.unwrap().unwrap();
+        let s_a = engine.index.get_state(a.id).await.unwrap().unwrap();
+        let s_b = engine.index.get_state(b.id).await.unwrap().unwrap();
+        assert_eq!(s_music.state, FileState::CloudOnly);
+        assert_eq!(s_a.state, FileState::CloudOnly);
+        assert_eq!(s_b.state, FileState::CloudOnly);
+        assert!(!s_music.pinned && !s_a.pinned && !s_b.pinned);
+        assert!(!cache_root.exists());
+    }
+
+    #[tokio::test]
+    async fn state_for_directory_reports_partial_when_files_are_mixed() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let music = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/B.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(music.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(a.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(b.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            engine.state_for_path("/Music").await.unwrap(),
+            Some(PathDisplayState::Partial)
+        );
+    }
+
+    #[tokio::test]
+    async fn pin_directory_applies_recursively() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let music = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let sub = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/Sub".into(),
+                parent_path: Some("/Music".into()),
+                name: "Sub".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/Sub/B.mp3".into(),
+                parent_path: Some("/Music/Sub".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(music.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(a.id, FileState::Cached, false, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(sub.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(b.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+
+        engine.pin_path("/Music", true).await.unwrap();
+
+        for id in [music.id, a.id, sub.id, b.id] {
+            let state = engine.index.get_state(id).await.unwrap().unwrap();
+            assert!(state.pinned);
+        }
+    }
+
+    #[tokio::test]
+    async fn state_for_directory_reports_cached_when_all_files_cached() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let music = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/B.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(music.id, FileState::CloudOnly, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(a.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(b.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            engine.state_for_path("/Music").await.unwrap(),
+            Some(PathDisplayState::Cached)
+        );
+    }
+
+    #[tokio::test]
+    async fn state_for_directory_prioritizes_error_and_syncing() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        let _music = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music".into(),
+                parent_path: Some("/".into()),
+                name: "Music".into(),
+                item_type: ItemType::Dir,
+                size: None,
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let a = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/A.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "A.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let b = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/B.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "B.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let c = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Music/C.mp3".into(),
+                parent_path: Some("/Music".into()),
+                name: "C.mp3".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+
+        engine
+            .index
+            .set_state(a.id, FileState::Cached, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(b.id, FileState::Syncing, true, None)
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(c.id, FileState::CloudOnly, false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.state_for_path("/Music").await.unwrap(),
+            Some(PathDisplayState::Syncing)
+        );
+
+        engine
+            .index
+            .set_state(b.id, FileState::Error, true, Some("x"))
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.state_for_path("/Music").await.unwrap(),
+            Some(PathDisplayState::Error)
+        );
     }
 
     #[tokio::test]

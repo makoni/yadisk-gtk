@@ -4,3 +4,4 @@ pub mod oauth_flow;
 pub mod storage;
 pub mod sync;
 pub mod token_provider;
+pub mod tray;

@@ -8,9 +8,9 @@ pub enum SyncUiState {
 
 pub fn adwaita_symbolic_icon(state: SyncUiState) -> &'static str {
     match state {
-        SyncUiState::CloudOnly => "cloud-symbolic",
-        SyncUiState::Cached => "emblem-ok-symbolic",
-        SyncUiState::Syncing => "view-refresh-symbolic",
+        SyncUiState::CloudOnly => "cloud-outline-thin-symbolic",
+        SyncUiState::Cached => "check-round-outline-symbolic",
+        SyncUiState::Syncing => "update-symbolic",
         SyncUiState::Error => "dialog-error-symbolic",
     }
 }
@@ -91,15 +91,15 @@ mod tests {
     fn uses_default_adwaita_icons() {
         assert_eq!(
             adwaita_symbolic_icon(SyncUiState::CloudOnly),
-            "cloud-symbolic"
+            "cloud-outline-thin-symbolic"
         );
         assert_eq!(
             adwaita_symbolic_icon(SyncUiState::Cached),
-            "emblem-ok-symbolic"
+            "check-round-outline-symbolic"
         );
         assert_eq!(
             adwaita_symbolic_icon(SyncUiState::Syncing),
-            "view-refresh-symbolic"
+            "update-symbolic"
         );
         assert_eq!(
             adwaita_symbolic_icon(SyncUiState::Error),
