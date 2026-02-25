@@ -14,6 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev
       - name: Run sandbox/portal smoke tests
         run: |
           cargo test -p yadiskd storage::secret_portal::tests::parses_truthy_flags -- --nocapture
@@ -26,6 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev
       - name: Run host-helper smoke tests
         run: |
           cargo test -p yadisk-fuse -- --nocapture
