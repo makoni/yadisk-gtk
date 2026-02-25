@@ -147,6 +147,16 @@ impl YadiskFuseBridge {
                 last_synced_modified: None,
             })
             .await?;
+        self.index
+            .enqueue_op(&Operation {
+                kind: OperationKind::Mkdir,
+                path: path.to_string(),
+                payload: None,
+                attempt: 0,
+                retry_at: None,
+                priority: 70,
+            })
+            .await?;
         Ok(())
     }
 }
@@ -168,6 +178,10 @@ mod tests {
         let bridge = make_bridge().await;
         bridge.mkdir("/Docs").await.unwrap();
         bridge.mkdir("/Docs/Sub").await.unwrap();
+        let op1 = bridge.index.dequeue_op().await.unwrap().unwrap();
+        let op2 = bridge.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(op1.kind, OperationKind::Mkdir);
+        assert_eq!(op2.kind, OperationKind::Mkdir);
         let dirents = bridge.readdir("/Docs").await.unwrap();
         assert_eq!(dirents, vec!["Sub".to_string()]);
         let attr = bridge.getattr("/Docs").await.unwrap();
@@ -178,6 +192,8 @@ mod tests {
     async fn read_write_rename_delete_enqueue_ops() {
         let bridge = make_bridge().await;
         bridge.mkdir("/Docs").await.unwrap();
+        let mkdir = bridge.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(mkdir.kind, OperationKind::Mkdir);
         bridge
             .index
             .upsert_item(&ItemInput {

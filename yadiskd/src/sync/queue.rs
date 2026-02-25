@@ -9,6 +9,7 @@ pub enum OperationKind {
     Download,
     Delete,
     Move,
+    Mkdir,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

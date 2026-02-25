@@ -280,6 +280,41 @@ impl SyncEngine {
             .await?)
     }
 
+    pub async fn enqueue_mkdir(&self, path: &str) -> Result<i64, EngineError> {
+        let item = if let Some(item) = self.index.get_item_by_path(path).await? {
+            item
+        } else {
+            self.index
+                .upsert_item(&ItemInput {
+                    path: path.to_string(),
+                    parent_path: parent_path(path),
+                    name: path.split('/').next_back().unwrap_or(path).to_string(),
+                    item_type: ItemType::Dir,
+                    size: None,
+                    modified: None,
+                    hash: None,
+                    resource_id: None,
+                    last_synced_hash: None,
+                    last_synced_modified: None,
+                })
+                .await?
+        };
+        self.index
+            .set_state(item.id, FileState::Syncing, true, None)
+            .await?;
+        Ok(self
+            .index
+            .enqueue_op(&Operation {
+                kind: OperationKind::Mkdir,
+                path: path.to_string(),
+                payload: None,
+                attempt: 0,
+                retry_at: None,
+                priority: 55,
+            })
+            .await?)
+    }
+
     pub async fn enqueue_delete(&self, path: &str) -> Result<i64, EngineError> {
         Ok(self
             .index
@@ -323,6 +358,7 @@ impl SyncEngine {
     pub async fn ingest_local_event(&self, event: LocalEvent) -> Result<i64, EngineError> {
         match event {
             LocalEvent::Upload { path } => self.enqueue_upload(&path).await,
+            LocalEvent::Mkdir { path } => self.enqueue_mkdir(&path).await,
             LocalEvent::Delete { path } => self.enqueue_delete(&path).await,
             LocalEvent::Move { from, to } => self.enqueue_move(&from, &to, "move").await,
         }
@@ -511,6 +547,7 @@ impl SyncEngine {
         let result = match op.kind.clone() {
             OperationKind::Download => self.execute_download(&op.path).await,
             OperationKind::Upload => self.execute_upload(&op.path).await,
+            OperationKind::Mkdir => self.execute_mkdir(&op.path).await,
             OperationKind::Delete => {
                 let link = self.client.delete_resource(&op.path, true).await?;
                 if let Some(link) = link {
@@ -671,12 +708,78 @@ impl SyncEngine {
         Ok(())
     }
 
+    async fn execute_mkdir(&self, path: &str) -> Result<(), EngineError> {
+        let resource = self.client.create_folder(path).await?;
+        let item = self
+            .index
+            .upsert_item(&ItemInput {
+                path: resource.path.clone(),
+                parent_path: parent_path(&resource.path),
+                name: resource.name.clone(),
+                item_type: ItemType::Dir,
+                size: resource.size.map(|v| v as i64),
+                modified: parse_modified(resource.modified.as_deref())?,
+                hash: resource.md5.clone(),
+                resource_id: resource.resource_id.clone(),
+                last_synced_hash: resource.md5.clone(),
+                last_synced_modified: parse_modified(resource.modified.as_deref())?,
+            })
+            .await?;
+        self.index
+            .set_state_with_meta(
+                item.id,
+                FileState::Cached,
+                true,
+                None,
+                StateMeta {
+                    retry_at: None,
+                    last_success_at: Some(now_unix()),
+                    last_error_at: None,
+                    dirty: false,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn execute_move_like_op(&self, op: &Operation) -> Result<(), EngineError> {
         let Some(payload) = &op.payload else {
             return Ok(());
         };
         let payload: MovePayload =
             serde_json::from_str(payload).map_err(|_| EngineError::OperationFailed)?;
+        let source_item = self.index.get_item_by_path(&payload.from).await?;
+        if payload.action != "copy"
+            && source_item.is_none()
+            && let Ok(target_local) = cache_path_for(&self.cache_root, &payload.path)
+            && let Ok(meta) = tokio::fs::metadata(&target_local).await
+        {
+            if meta.is_dir() {
+                return self.execute_mkdir(&payload.path).await;
+            }
+            if self.index.get_item_by_path(&payload.path).await?.is_none() {
+                self.index
+                    .upsert_item(&ItemInput {
+                        path: payload.path.clone(),
+                        parent_path: parent_path(&payload.path),
+                        name: payload
+                            .path
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(payload.path.as_str())
+                            .to_string(),
+                        item_type: ItemType::File,
+                        size: Some(meta.len() as i64),
+                        modified: None,
+                        hash: None,
+                        resource_id: None,
+                        last_synced_hash: None,
+                        last_synced_modified: None,
+                    })
+                    .await?;
+            }
+            return self.execute_upload(&payload.path).await;
+        }
         let link = if payload.action == "copy" {
             self.client
                 .copy_resource(&payload.from, &payload.path, payload.overwrite)
@@ -688,7 +791,7 @@ impl SyncEngine {
         };
         self.wait_for_operation(link.href.as_str()).await?;
 
-        if let Some(source) = self.index.get_item_by_path(&payload.from).await? {
+        if let Some(source) = source_item {
             let mut input = ItemInput {
                 path: payload.path.clone(),
                 parent_path: parent_path(&payload.path),
@@ -1540,6 +1643,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_once_mkdir_creates_remote_folder_and_sets_cached_state() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "/Docs/NewFolder"))
+            .and(header("authorization", "OAuth test-token"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "path": "/Docs/NewFolder",
+                "name": "NewFolder",
+                "type": "dir"
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine.enqueue_mkdir("/Docs/NewFolder").await.unwrap();
+        assert!(engine.run_once().await.unwrap());
+
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/NewFolder")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.item_type, ItemType::Dir);
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        assert_eq!(state.state, FileState::Cached);
+    }
+
+    #[tokio::test]
     async fn sync_directory_incremental_handles_rename_delete_and_pinned_download() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -1698,11 +1832,19 @@ mod tests {
             })
             .await
             .unwrap();
+        engine
+            .ingest_local_event(LocalEvent::Mkdir {
+                path: "/Docs/NewFolder".into(),
+            })
+            .await
+            .unwrap();
 
         let first = engine.index.dequeue_op().await.unwrap().unwrap();
         assert_eq!(first.kind, OperationKind::Delete);
         let second = engine.index.dequeue_op().await.unwrap().unwrap();
         assert_eq!(second.kind, OperationKind::Move);
+        let third = engine.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(third.kind, OperationKind::Mkdir);
     }
 
     #[tokio::test]
@@ -1793,6 +1935,66 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn run_once_move_with_missing_source_falls_back_to_upload() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/upload"))
+            .and(query_param("path", "/Docs/B.txt"))
+            .and(query_param("overwrite", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/upload", server.uri()),
+                "method": "PUT",
+                "templated": false
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload"))
+            .and(body_bytes(b"payload"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let target = cache_path_for(dir.path(), "/Docs/B.txt").unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"payload").unwrap();
+
+        engine
+            .index
+            .enqueue_op(&Operation {
+                kind: OperationKind::Move,
+                path: "/Docs/B.txt".into(),
+                payload: Some(
+                    serde_json::json!({
+                        "from": "/Docs/.tmp-atomic",
+                        "path": "/Docs/B.txt",
+                        "overwrite": true,
+                        "action": "move"
+                    })
+                    .to_string(),
+                ),
+                attempt: 0,
+                retry_at: None,
+                priority: 60,
+            })
+            .await
+            .unwrap();
+
+        assert!(engine.run_once().await.unwrap());
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/B.txt")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.item_type, ItemType::File);
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        assert_eq!(state.state, FileState::Cached);
     }
 
     #[tokio::test]

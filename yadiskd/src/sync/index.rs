@@ -116,6 +116,7 @@ fn operation_kind_as_str(kind: &OperationKind) -> &'static str {
         OperationKind::Download => "download",
         OperationKind::Delete => "delete",
         OperationKind::Move => "move",
+        OperationKind::Mkdir => "mkdir",
     }
 }
 
@@ -125,6 +126,7 @@ fn parse_operation_kind(value: &str) -> Result<OperationKind, IndexError> {
         "download" => Ok(OperationKind::Download),
         "delete" => Ok(OperationKind::Delete),
         "move" => Ok(OperationKind::Move),
+        "mkdir" => Ok(OperationKind::Mkdir),
         other => Err(IndexError::InvalidOperationKind(other.to_string())),
     }
 }
