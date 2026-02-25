@@ -236,6 +236,7 @@ impl DaemonRuntime {
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
+            let mut previous_materialized_paths: HashSet<PathBuf> = HashSet::new();
             loop {
                 if !materialize_enabled {
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -253,12 +254,39 @@ impl DaemonRuntime {
                 )
                 .await
                 {
-                    Ok(total_items) if !initial_logged => {
-                        eprintln!("[yadiskd] metadata tree initialized: {total_items} entries");
-                        local_events_enabled_materialize.store(true, Ordering::SeqCst);
-                        initial_logged = true;
+                    Ok(total_items) => {
+                        match collect_materialized_local_paths(
+                            &engine_for_materialize,
+                            &materialize_sync_root,
+                            &materialize_remote_root,
+                        )
+                        .await
+                        {
+                            Ok(current_paths) => {
+                                if initial_logged
+                                    && let Err(err) = prune_removed_materialized_paths(
+                                        &previous_materialized_paths,
+                                        &current_paths,
+                                        &materialize_sync_root,
+                                        &materialize_cache_root,
+                                    )
+                                    .await
+                                {
+                                    eprintln!("[yadiskd] materialize prune error: {err}");
+                                }
+                                previous_materialized_paths = current_paths;
+                            }
+                            Err(err) => {
+                                eprintln!("[yadiskd] materialize metadata collection error: {err}")
+                            }
+                        }
+
+                        if !initial_logged {
+                            eprintln!("[yadiskd] metadata tree initialized: {total_items} entries");
+                            local_events_enabled_materialize.store(true, Ordering::SeqCst);
+                            initial_logged = true;
+                        }
                     }
-                    Ok(_) => {}
                     Err(err) => {
                         local_events_enabled_materialize.store(true, Ordering::SeqCst);
                         if error_contains_enosys(&err) {
@@ -431,6 +459,15 @@ impl DaemonRuntime {
                             }
                         }
                         LocalEvent::Delete { path } => {
+                            if engine_for_local
+                                .state_for_path(path)
+                                .await
+                                .ok()
+                                .flatten()
+                                .is_none()
+                            {
+                                continue;
+                            }
                             seen_uploads.remove(path);
                         }
                         LocalEvent::Move { from, to } => {

@@ -640,3 +640,39 @@ async fn materialize_skips_missing_syncing_files() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn prune_removed_materialized_paths_removes_stale_paths_only() {
+    let sync_dir = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+    let docs = sync_dir.path().join("Docs");
+    tokio::fs::create_dir_all(&docs).await.unwrap();
+    let stale = docs.join("Stale.txt");
+    let keep = sync_dir.path().join("Keep.txt");
+    tokio::fs::write(&stale, b"old").await.unwrap();
+    tokio::fs::write(&keep, b"keep").await.unwrap();
+    let stale_cache = cache_dir.path().join("Docs/Stale.txt");
+    let keep_cache = cache_dir.path().join("Keep.txt");
+    tokio::fs::create_dir_all(stale_cache.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&stale_cache, b"old-cache").await.unwrap();
+    tokio::fs::write(&keep_cache, b"keep-cache").await.unwrap();
+
+    let previous = std::collections::HashSet::from([
+        sync_dir.path().to_path_buf(),
+        docs.clone(),
+        stale.clone(),
+    ]);
+    let current = std::collections::HashSet::from([sync_dir.path().to_path_buf(), keep.clone()]);
+
+    prune_removed_materialized_paths(&previous, &current, sync_dir.path(), cache_dir.path())
+        .await
+        .unwrap();
+
+    assert!(tokio::fs::metadata(&stale).await.is_err());
+    assert!(tokio::fs::metadata(&docs).await.is_err());
+    assert!(tokio::fs::metadata(&keep).await.is_ok());
+    assert!(tokio::fs::metadata(&stale_cache).await.is_err());
+    assert!(tokio::fs::metadata(&keep_cache).await.is_ok());
+}

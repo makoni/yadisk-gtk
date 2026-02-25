@@ -442,6 +442,80 @@ async fn materialize_sync_tree(
     Ok(items.len())
 }
 
+async fn collect_materialized_local_paths(
+    engine: &SyncEngine,
+    sync_root: &Path,
+    remote_root: &str,
+) -> anyhow::Result<HashSet<PathBuf>> {
+    let items = engine.list_items_by_prefix(remote_root).await?;
+    let mut paths = HashSet::with_capacity(items.len() * 2 + 1);
+    paths.insert(sync_root.to_path_buf());
+    for item in items {
+        let local_path = sync_path_for(sync_root, &item.path)?;
+        paths.insert(local_path.clone());
+        let mut parent = local_path.parent();
+        while let Some(dir) = parent {
+            if !dir.starts_with(sync_root) {
+                break;
+            }
+            paths.insert(dir.to_path_buf());
+            if dir == sync_root {
+                break;
+            }
+            parent = dir.parent();
+        }
+    }
+    Ok(paths)
+}
+
+async fn prune_removed_materialized_paths(
+    previous: &HashSet<PathBuf>,
+    current: &HashSet<PathBuf>,
+    sync_root: &Path,
+    cache_root: &Path,
+) -> anyhow::Result<()> {
+    let mut stale: Vec<PathBuf> = previous
+        .iter()
+        .filter(|path| !current.contains(*path) && path.as_path() != sync_root)
+        .cloned()
+        .collect();
+    stale.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+
+    for path in stale {
+        if !path.starts_with(sync_root) {
+            continue;
+        }
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(meta) if meta.is_file() || meta.file_type().is_symlink() => {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            Ok(meta) if meta.is_dir() => {
+                let _ = tokio::fs::remove_dir(&path).await;
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        if let Ok(relative) = path.strip_prefix(sync_root) {
+            let cache_path = cache_root.join(relative);
+            match tokio::fs::symlink_metadata(&cache_path).await {
+                Ok(meta) if meta.is_file() || meta.file_type().is_symlink() => {
+                    let _ = tokio::fs::remove_file(&cache_path).await;
+                }
+                Ok(meta) if meta.is_dir() => {
+                    let _ = tokio::fs::remove_dir_all(&cache_path).await;
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn state_for_path(states: &HashMap<String, FileState>, path: &str) -> Option<FileState> {
     if let Some(state) = states.get(path) {
         return Some(state.clone());
