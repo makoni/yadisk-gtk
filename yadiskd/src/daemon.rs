@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
+use md5::Context as Md5Context;
+use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient, YadiskClient};
 use yadisk_integrations::ids::{DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};

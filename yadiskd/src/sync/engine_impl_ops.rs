@@ -180,8 +180,7 @@ impl SyncEngine {
     }
 
     async fn local_file_version(&self, source: &std::path::Path) -> Result<LocalFileVersion, EngineError> {
-        let bytes = tokio::fs::read(source).await?;
-        let hash = format!("{:x}", md5::compute(&bytes));
+        let hash = Self::file_md5_hex(source).await?;
         let meta = tokio::fs::metadata(source).await?;
         let modified = meta
             .modified()
@@ -198,6 +197,20 @@ impl SyncEngine {
                 hash: Some(hash),
             },
         })
+    }
+
+    async fn file_md5_hex(path: &std::path::Path) -> Result<String, EngineError> {
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut hasher = Context::new();
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buf).await?;
+            if read == 0 {
+                break;
+            }
+            hasher.consume(&buf[..read]);
+        }
+        Ok(format!("{:x}", hasher.compute()))
     }
 
     async fn mark_item_synced(

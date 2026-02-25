@@ -59,6 +59,93 @@
     }
 
     #[tokio::test]
+    async fn run_once_upload_supports_disk_prefixed_paths() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/upload"))
+            .and(query_param("path", "disk:/Docs/New.txt"))
+            .and(query_param("overwrite", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/upload", server.uri()),
+                "method": "PUT",
+                "templated": false
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload"))
+            .and(body_bytes(b"new-file"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let target = cache_path_for(dir.path(), "disk:/Docs/New.txt").unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"new-file").unwrap();
+
+        engine
+            .ingest_local_event(LocalEvent::Upload {
+                path: "disk:/Docs/New.txt".into(),
+            })
+            .await
+            .unwrap();
+        assert!(engine.run_once().await.unwrap());
+
+        assert!(engine
+            .index
+            .get_item_by_path("disk:/Docs/New.txt")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn run_once_delete_supports_disk_prefixed_paths() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "disk:/Docs/Delete.txt"))
+            .and(query_param("permanently", "true"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "disk:/Docs/Delete.txt".into(),
+                parent_path: Some("disk:/Docs".into()),
+                name: "Delete.txt".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .ingest_local_event(LocalEvent::Delete {
+                path: "disk:/Docs/Delete.txt".into(),
+            })
+            .await
+            .unwrap();
+        assert!(engine.run_once().await.unwrap());
+        assert!(engine
+            .index
+            .get_item_by_path("disk:/Docs/Delete.txt")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn run_once_mkdir_creates_remote_folder_and_sets_cached_state() {
         let server = MockServer::start().await;
         Mock::given(method("PUT"))

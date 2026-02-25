@@ -226,16 +226,30 @@ async fn should_skip_local_upload_event(
             if cache_meta.is_dir() || meta.is_dir() || cache_meta.len() != meta.len() {
                 return false;
             }
-            let Ok(local_bytes) = tokio::fs::read(&local_path).await else {
+            let Ok(local_md5) = file_md5_hex(&local_path).await else {
                 return false;
             };
-            let Ok(cache_bytes) = tokio::fs::read(&cache_path).await else {
+            let Ok(cache_md5) = file_md5_hex(&cache_path).await else {
                 return false;
             };
-            local_bytes == cache_bytes
+            local_md5 == cache_md5
         }
         _ => false,
     }
+}
+
+async fn file_md5_hex(path: &Path) -> anyhow::Result<String> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Md5Context::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buf).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.consume(&buf[..read]);
+    }
+    Ok(format!("{:x}", hasher.compute()))
 }
 
 async fn upload_fingerprint(sync_root: &Path, path: &str) -> Option<(u64, u128)> {
