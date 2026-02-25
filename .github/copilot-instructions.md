@@ -71,4 +71,7 @@ This repo is a Rust workspace with two main crates:
   - REST client behavior is verified via `wiremock` matchers (method/path/query/header) rather than hitting the real API.
   - SQLite logic is tested against `sqlite::memory:` and must call `IndexStore::init()` before queries.
 - **Clippy gate:** the repo runs clippy with `-D warnings`; avoid introducing unused items/imports unless they are intentionally behind `#[cfg(test)]` or actively used.
-
+- **Refactoring/file size:**
+  - Prefer small cohesive modules with one responsibility; when a file grows, split by domain boundaries (DBus, sync ops, storage, tests).
+  - Practical target: **250-400 lines per file**.
+  - **500+ lines is a refactor trigger**: extract modules/helpers/tests instead of further growing the file.
