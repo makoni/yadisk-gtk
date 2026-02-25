@@ -136,6 +136,180 @@ fn read_bool_env(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+async fn mirror_local_event_to_cache(
+    sync_root: &Path,
+    cache_root: &Path,
+    event: &LocalEvent,
+) -> anyhow::Result<()> {
+    match event {
+        LocalEvent::Upload { path } => {
+            let source = sync_path_for(sync_root, path)?;
+            let Ok(meta) = tokio::fs::metadata(&source).await else {
+                return Ok(());
+            };
+            if meta.is_dir() {
+                return Ok(());
+            }
+            let target = crate::sync::paths::cache_path_for(cache_root, path)?;
+            if let Some(parent) = target.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let _ = tokio::fs::copy(&source, &target).await?;
+        }
+        LocalEvent::Mkdir { path } => {
+            let target = crate::sync::paths::cache_path_for(cache_root, path)?;
+            tokio::fs::create_dir_all(&target).await?;
+        }
+        LocalEvent::Delete { path } => {
+            let target = crate::sync::paths::cache_path_for(cache_root, path)?;
+            if let Ok(meta) = tokio::fs::metadata(&target).await {
+                if meta.is_dir() {
+                    let _ = tokio::fs::remove_dir_all(&target).await;
+                } else {
+                    let _ = tokio::fs::remove_file(&target).await;
+                }
+            }
+        }
+        LocalEvent::Move { from, to } => {
+            let from_cache = crate::sync::paths::cache_path_for(cache_root, from)?;
+            let to_cache = crate::sync::paths::cache_path_for(cache_root, to)?;
+            if let Some(parent) = to_cache.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            if tokio::fs::metadata(&from_cache).await.is_ok() {
+                match tokio::fs::rename(&from_cache, &to_cache).await {
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            let local_target = sync_path_for(sync_root, to)?;
+            if let Ok(meta) = tokio::fs::metadata(&local_target).await {
+                if meta.is_dir() {
+                    tokio::fs::create_dir_all(&to_cache).await?;
+                } else {
+                    if let Some(parent) = to_cache.parent() {
+                        tokio::fs::create_dir_all(parent).await?;
+                    }
+                    let _ = tokio::fs::copy(&local_target, &to_cache).await?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn should_skip_local_upload_event(
+    engine: &SyncEngine,
+    sync_root: &Path,
+    cache_root: &Path,
+    path: &str,
+) -> bool {
+    let Ok(local_path) = sync_path_for(sync_root, path) else {
+        return false;
+    };
+    let Ok(meta) = tokio::fs::metadata(&local_path).await else {
+        return false;
+    };
+    let Ok(Some(state)) = engine.state_for_path(path).await else {
+        return false;
+    };
+    match state {
+        crate::sync::engine::PathDisplayState::CloudOnly => meta.len() == 0,
+        crate::sync::engine::PathDisplayState::Cached => {
+            let Ok(cache_path) = crate::sync::paths::cache_path_for(cache_root, path) else {
+                return false;
+            };
+            let Ok(cache_meta) = tokio::fs::metadata(&cache_path).await else {
+                return false;
+            };
+            if cache_meta.is_dir() || meta.is_dir() || cache_meta.len() != meta.len() {
+                return false;
+            }
+            let Ok(local_bytes) = tokio::fs::read(&local_path).await else {
+                return false;
+            };
+            let Ok(cache_bytes) = tokio::fs::read(&cache_path).await else {
+                return false;
+            };
+            local_bytes == cache_bytes
+        }
+        _ => false,
+    }
+}
+
+async fn upload_fingerprint(sync_root: &Path, path: &str) -> Option<(u64, u128)> {
+    let local_path = sync_path_for(sync_root, path).ok()?;
+    let meta = tokio::fs::metadata(local_path).await.ok()?;
+    if meta.is_dir() {
+        return None;
+    }
+    let modified_ns = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), modified_ns))
+}
+
+fn should_process_upload_event(
+    seen_uploads: &mut HashMap<String, (u64, u128)>,
+    path: &str,
+    fingerprint: (u64, u128),
+) -> bool {
+    if seen_uploads.get(path) == Some(&fingerprint) {
+        return false;
+    }
+    seen_uploads.insert(path.to_string(), fingerprint);
+    true
+}
+
+fn normalize_local_event_for_remote_root(event: LocalEvent, remote_root: &str) -> LocalEvent {
+    fn normalize_path(path: String, remote_root: &str) -> String {
+        if remote_root.starts_with("disk:/") {
+            if path.starts_with("disk:/") {
+                return path;
+            }
+            let slash = if let Some(rest) = path.strip_prefix("disk:/") {
+                format!("/{}", rest.trim_start_matches('/'))
+            } else if path.starts_with('/') {
+                path
+            } else {
+                format!("/{}", path)
+            };
+            let rest = slash.trim_start_matches('/');
+            if rest.is_empty() {
+                "disk:/".to_string()
+            } else {
+                format!("disk:/{}", rest)
+            }
+        } else if let Some(rest) = path.strip_prefix("disk:/") {
+            format!("/{}", rest.trim_start_matches('/'))
+        } else if path.starts_with('/') {
+            path
+        } else {
+            format!("/{}", path)
+        }
+    }
+
+    match event {
+        LocalEvent::Upload { path } => LocalEvent::Upload {
+            path: normalize_path(path, remote_root),
+        },
+        LocalEvent::Mkdir { path } => LocalEvent::Mkdir {
+            path: normalize_path(path, remote_root),
+        },
+        LocalEvent::Delete { path } => LocalEvent::Delete {
+            path: normalize_path(path, remote_root),
+        },
+        LocalEvent::Move { from, to } => LocalEvent::Move {
+            from: normalize_path(from, remote_root),
+            to: normalize_path(to, remote_root),
+        },
+    }
+}
+
 async fn materialize_sync_tree(
     engine: &SyncEngine,
     sync_root: &Path,
@@ -166,6 +340,32 @@ async fn materialize_sync_tree(
             touched_dirs.insert(parent.to_path_buf());
         }
         let state = state_for_path(&states, &item.path);
+        if tokio::fs::try_exists(&local_path).await? {
+            match state {
+                Some(FileState::CloudOnly) => {
+                    let local_meta = tokio::fs::metadata(&local_path).await?;
+                    if local_meta.len() > 0 {
+                        let file = tokio::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&local_path)
+                            .await?;
+                        file.set_len(0).await?;
+                    }
+                }
+                Some(FileState::Cached) => {
+                    let local_meta = tokio::fs::metadata(&local_path).await?;
+                    if local_meta.len() == 0 {
+                        let cache_path = crate::sync::paths::cache_path_for(cache_root, &item.path)?;
+                        if tokio::fs::try_exists(&cache_path).await? {
+                            let _ = tokio::fs::copy(&cache_path, &local_path).await?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
         if matches!(state, Some(FileState::Cached)) {
             let cache_path = crate::sync::paths::cache_path_for(cache_root, &item.path)?;
             if tokio::fs::try_exists(&cache_path).await? {
@@ -175,17 +375,6 @@ async fn materialize_sync_tree(
                     Err(err) => return Err(err.into()),
                 }
             }
-        }
-
-        if tokio::fs::try_exists(&local_path).await? {
-            if matches!(state, Some(FileState::CloudOnly)) {
-                let file = tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&local_path)
-                    .await?;
-                file.set_len(0).await?;
-            }
-            continue;
         }
 
         match tokio::fs::OpenOptions::new()

@@ -51,6 +51,69 @@
     }
 
     #[tokio::test]
+    async fn upload_conflict_downloads_remote_when_only_remote_changed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "path": "/Docs/A.txt",
+                "name": "A.txt",
+                "type": "file",
+                "size": 5,
+                "modified": "2024-01-01T00:00:00Z",
+                "md5": "7d793037a0760186574b0282f2f435e7"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/download"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/file", server.uri()),
+                "method": "GET",
+                "templated": false
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/file"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"world"))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(5),
+                modified: Some(1),
+                hash: Some("5d41402abc4b2a76b9719d911017c592".into()),
+                resource_id: None,
+                last_synced_hash: Some("5d41402abc4b2a76b9719d911017c592".into()),
+                last_synced_modified: Some(1),
+            })
+            .await
+            .unwrap();
+        let source = cache_path_for(dir.path(), "/Docs/A.txt").unwrap();
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"hello").await.unwrap();
+
+        engine.enqueue_upload("/Docs/A.txt").await.unwrap();
+        assert!(engine.run_once().await.unwrap());
+
+        let downloaded = tokio::fs::read(&source).await.unwrap();
+        assert_eq!(downloaded, b"world");
+    }
+
+    #[tokio::test]
     async fn run_once_does_not_requeue_permanent_errors() {
         let server = MockServer::start().await;
         let dir = tempdir().unwrap();

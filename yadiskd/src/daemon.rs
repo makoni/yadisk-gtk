@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -63,7 +64,7 @@ impl DaemonConfig {
         let eviction_interval =
             Duration::from_secs(read_u64_env("YADISK_EVICTION_SECS", DEFAULT_EVICTION_SECS));
         let cache_max_bytes = read_u64_env("YADISK_CACHE_MAX_BYTES", DEFAULT_CACHE_MAX_BYTES);
-        let enable_local_watcher = read_bool_env("YADISK_ENABLE_LOCAL_WATCHER", false);
+        let enable_local_watcher = read_bool_env("YADISK_ENABLE_LOCAL_WATCHER", true);
 
         Ok(Self {
             sync_root,
@@ -110,7 +111,7 @@ impl DaemonRuntime {
             if self.config.enable_local_watcher {
                 "enabled"
             } else {
-                "disabled (metadata-only default)"
+                "disabled"
             }
         );
 
@@ -141,6 +142,7 @@ impl DaemonRuntime {
             })
         });
         let _ = tray_state_tx.send(TraySyncState::Syncing);
+        let local_events_enabled = Arc::new(AtomicBool::new(false));
 
         let (watcher, mut local_rx): (
             Option<notify::RecommendedWatcher>,
@@ -208,6 +210,7 @@ impl DaemonRuntime {
         let materialize_sync_root = self.config.sync_root.clone();
         let materialize_cache_root = self.config.cache_root.clone();
         let materialize_remote_root = self.config.remote_root.clone();
+        let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
@@ -226,10 +229,12 @@ impl DaemonRuntime {
                 {
                     Ok(total_items) if !initial_logged => {
                         eprintln!("[yadiskd] metadata tree initialized: {total_items} entries");
+                        local_events_enabled_materialize.store(true, Ordering::SeqCst);
                         initial_logged = true;
                     }
                     Ok(_) => {}
                     Err(err) => {
+                        local_events_enabled_materialize.store(true, Ordering::SeqCst);
                         if error_contains_enosys(&err) {
                             eprintln!(
                                 "[yadiskd] materialization disabled: filesystem does not support required write operations"
@@ -326,9 +331,53 @@ impl DaemonRuntime {
 
         let local_handle = if let Some(mut rx) = local_rx.take() {
             let engine_for_local = Arc::clone(&self.engine);
+            let local_sync_root = self.config.sync_root.clone();
+            let local_cache_root = self.config.cache_root.clone();
+            let local_remote_root = self.config.remote_root.clone();
+            let local_events_enabled_local = Arc::clone(&local_events_enabled);
             Some(tokio::spawn(async move {
+                let mut seen_uploads: HashMap<String, (u64, u128)> = HashMap::new();
                 while let Some(event) = rx.recv().await {
+                    if !local_events_enabled_local.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let event = normalize_local_event_for_remote_root(event, &local_remote_root);
+                    match &event {
+                        LocalEvent::Upload { path } => {
+                            if should_skip_local_upload_event(
+                                &engine_for_local,
+                                &local_sync_root,
+                                &local_cache_root,
+                                path,
+                            )
+                            .await
+                            {
+                                continue;
+                            }
+                            let Some(fp) = upload_fingerprint(&local_sync_root, path).await else {
+                                continue;
+                            };
+                            if !should_process_upload_event(&mut seen_uploads, path, fp) {
+                                continue;
+                            }
+                        }
+                        LocalEvent::Delete { path } => {
+                            seen_uploads.remove(path);
+                        }
+                        LocalEvent::Move { from, to } => {
+                            if let Some(fp) = seen_uploads.remove(from) {
+                                seen_uploads.insert(to.clone(), fp);
+                            }
+                        }
+                        LocalEvent::Mkdir { .. } => {}
+                    }
                     eprintln!("[yadiskd] local event: {:?}", event);
+                    if let Err(err) =
+                        mirror_local_event_to_cache(&local_sync_root, &local_cache_root, &event)
+                            .await
+                    {
+                        eprintln!("[yadiskd] local cache mirror error: {err}");
+                    }
                     if let Err(err) = engine_for_local.ingest_local_event(event).await {
                         eprintln!("[yadiskd] local ingest error: {err}");
                     }

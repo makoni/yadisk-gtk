@@ -87,16 +87,139 @@ impl SyncEngine {
 
     async fn execute_upload(&self, path: &str) -> Result<(), EngineError> {
         let source = cache_path_for(&self.cache_root, path)?;
-        let link = self.client.get_upload_link(path, true).await?;
-        self.transfer
-            .upload_from_path(link.href.as_str(), &source)
-            .await?;
-
         let item = self
             .index
             .get_item_by_path(path)
             .await?
             .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+        let local_version = self.local_file_version(&source).await?;
+
+        let remote = match self.client.get_resource(path).await {
+            Ok(resource) => Some(resource),
+            Err(yadisk_core::YadiskError::Api { status, .. })
+                if status == reqwest::StatusCode::NOT_FOUND =>
+            {
+                None
+            }
+            Err(err) => return Err(err.into()),
+        };
+
+        let base = if item.last_synced_hash.is_some() || item.last_synced_modified.is_some() {
+            Some(FileMetadata {
+                modified: item.last_synced_modified.unwrap_or(0),
+                hash: item.last_synced_hash.clone(),
+            })
+        } else {
+            None
+        };
+
+        let decision = if let Some(remote) = &remote {
+            let remote_meta = FileMetadata {
+                modified: parse_modified(remote.modified.as_deref())?.unwrap_or(0),
+                hash: remote.md5.clone(),
+            };
+            self.resolve_conflict_and_record(path, base.as_ref(), &local_version.meta, &remote_meta)
+                .await?
+        } else {
+            ConflictDecision::UploadLocal
+        };
+
+        match decision {
+            ConflictDecision::NoOp => {
+                self.mark_item_synced(&item, path, &local_version).await?;
+            }
+            ConflictDecision::UploadLocal => {
+                self.upload_path_from_source(path, &source, &item, &local_version)
+                    .await?;
+            }
+            ConflictDecision::DownloadRemote => {
+                if let Some(remote) = &remote {
+                    let _ = self.apply_remote_snapshot(remote).await?;
+                }
+                self.execute_download(path).await?;
+            }
+            ConflictDecision::KeepBoth { renamed_local } => {
+                let renamed_source = cache_path_for(&self.cache_root, &renamed_local)?;
+                if let Some(parent) = renamed_source.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                tokio::fs::copy(&source, &renamed_source).await?;
+                let conflict_item = self
+                    .index
+                    .upsert_item(&ItemInput {
+                        path: renamed_local.clone(),
+                        parent_path: parent_path(&renamed_local),
+                        name: renamed_local
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(renamed_local.as_str())
+                            .to_string(),
+                        item_type: ItemType::File,
+                        size: Some(local_version.size as i64),
+                        modified: Some(local_version.modified),
+                        hash: Some(local_version.hash.clone()),
+                        resource_id: None,
+                        last_synced_hash: None,
+                        last_synced_modified: None,
+                    })
+                    .await?;
+                self.upload_path_from_source(
+                    &renamed_local,
+                    &renamed_source,
+                    &conflict_item,
+                    &local_version,
+                )
+                .await?;
+                if let Some(remote) = &remote {
+                    let _ = self.apply_remote_snapshot(remote).await?;
+                }
+                self.execute_download(path).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn local_file_version(&self, source: &std::path::Path) -> Result<LocalFileVersion, EngineError> {
+        let bytes = tokio::fs::read(source).await?;
+        let hash = format!("{:x}", md5::compute(&bytes));
+        let meta = tokio::fs::metadata(source).await?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_else(now_unix);
+        Ok(LocalFileVersion {
+            hash: hash.clone(),
+            modified,
+            size: meta.len(),
+            meta: FileMetadata {
+                modified,
+                hash: Some(hash),
+            },
+        })
+    }
+
+    async fn mark_item_synced(
+        &self,
+        item: &ItemRecord,
+        path: &str,
+        local_version: &LocalFileVersion,
+    ) -> Result<(), EngineError> {
+        self.index
+            .upsert_item(&ItemInput {
+                path: path.to_string(),
+                parent_path: parent_path(path),
+                name: path.split('/').next_back().unwrap_or(path).to_string(),
+                item_type: item.item_type.clone(),
+                size: Some(local_version.size as i64),
+                modified: Some(local_version.modified),
+                hash: Some(local_version.hash.clone()),
+                resource_id: item.resource_id.clone(),
+                last_synced_hash: Some(local_version.hash.clone()),
+                last_synced_modified: Some(local_version.modified),
+            })
+            .await?;
         self.index
             .set_state_with_meta(
                 item.id,
@@ -112,6 +235,44 @@ impl SyncEngine {
             )
             .await?;
         Ok(())
+    }
+
+    async fn upload_path_from_source(
+        &self,
+        path: &str,
+        source: &std::path::Path,
+        item: &ItemRecord,
+        local_version: &LocalFileVersion,
+    ) -> Result<(), EngineError> {
+        let link = self.client.get_upload_link(path, true).await?;
+        self.transfer
+            .upload_from_path(link.href.as_str(), source)
+            .await?;
+        self.mark_item_synced(item, path, local_version).await
+    }
+
+    async fn apply_remote_snapshot(
+        &self,
+        remote: &yadisk_core::Resource,
+    ) -> Result<ItemRecord, EngineError> {
+        Ok(self
+            .index
+            .upsert_item(&ItemInput {
+                path: remote.path.clone(),
+                parent_path: parent_path(&remote.path),
+                name: remote.name.clone(),
+                item_type: match remote.resource_type {
+                    ResourceType::File => ItemType::File,
+                    ResourceType::Dir => ItemType::Dir,
+                },
+                size: remote.size.map(|v| v as i64),
+                modified: parse_modified(remote.modified.as_deref())?,
+                hash: remote.md5.clone(),
+                resource_id: remote.resource_id.clone(),
+                last_synced_hash: remote.md5.clone(),
+                last_synced_modified: parse_modified(remote.modified.as_deref())?,
+            })
+            .await?)
     }
 
     async fn execute_mkdir(&self, path: &str) -> Result<(), EngineError> {

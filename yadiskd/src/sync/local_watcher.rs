@@ -48,7 +48,7 @@ fn map_event(root: &Path, event: Event) -> Vec<LocalEvent> {
             .into_iter()
             .filter_map(|path| map_created_path(root, &path))
             .collect(),
-        EventKind::Modify(_) => event
+        EventKind::Modify(notify::event::ModifyKind::Data(_)) => event
             .paths
             .into_iter()
             .filter_map(|path| map_modified_path(root, &path))
@@ -159,5 +159,39 @@ mod tests {
                 to: "/Docs/B.txt".into()
             }]
         );
+    }
+
+    #[test]
+    fn ignores_metadata_only_modify_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let file = root.join("Docs/A.txt");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Metadata(
+                notify::event::MetadataKind::Any,
+            )),
+            paths: vec![file],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert!(mapped.is_empty());
+    }
+
+    #[test]
+    fn ignores_modify_any_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let file = root.join("Docs/A.txt");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"x").unwrap();
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
+            paths: vec![file],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert!(mapped.is_empty());
     }
 }

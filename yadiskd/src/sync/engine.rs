@@ -86,6 +86,13 @@ struct MovePayload {
     action: String,
 }
 
+struct LocalFileVersion {
+    hash: String,
+    modified: i64,
+    size: u64,
+    meta: FileMetadata,
+}
+
 fn default_move_action() -> String {
     "move".to_string()
 }

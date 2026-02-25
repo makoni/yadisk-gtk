@@ -148,11 +148,31 @@ impl SyncEngine {
     }
 
     pub async fn enqueue_upload(&self, path: &str) -> Result<i64, EngineError> {
-        let item = self
-            .index
-            .get_item_by_path(path)
-            .await?
-            .ok_or_else(|| EngineError::MissingItem(path.to_string()))?;
+        let item = if let Some(item) = self.index.get_item_by_path(path).await? {
+            item
+        } else {
+            let local = cache_path_for(&self.cache_root, path)?;
+            let meta = tokio::fs::metadata(&local)
+                .await
+                .map_err(|_| EngineError::MissingItem(path.to_string()))?;
+            if meta.is_dir() {
+                return self.enqueue_mkdir(path).await;
+            }
+            self.index
+                .upsert_item(&ItemInput {
+                    path: path.to_string(),
+                    parent_path: parent_path(path),
+                    name: path.split('/').next_back().unwrap_or(path).to_string(),
+                    item_type: ItemType::File,
+                    size: Some(meta.len() as i64),
+                    modified: None,
+                    hash: None,
+                    resource_id: None,
+                    last_synced_hash: None,
+                    last_synced_modified: None,
+                })
+                .await?
+        };
         self.index
             .set_state(item.id, FileState::Syncing, true, None)
             .await?;

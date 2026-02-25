@@ -264,6 +264,37 @@
     }
 
     #[tokio::test]
+    async fn ingest_local_upload_for_new_file_creates_item() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        let local = cache_path_for(dir.path(), "/Docs/New.txt").unwrap();
+        tokio::fs::create_dir_all(local.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&local, b"new").await.unwrap();
+
+        engine
+            .ingest_local_event(LocalEvent::Upload {
+                path: "/Docs/New.txt".into(),
+            })
+            .await
+            .unwrap();
+
+        let op = engine.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(op.kind, OperationKind::Upload);
+        assert_eq!(op.path, "/Docs/New.txt");
+
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/New.txt")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.item_type, ItemType::File);
+    }
+
+    #[tokio::test]
     async fn conflict_resolution_keep_both_records_conflict() {
         let server = MockServer::start().await;
         let dir = tempdir().unwrap();
@@ -412,4 +443,3 @@
         let state = engine.index.get_state(item.id).await.unwrap().unwrap();
         assert_eq!(state.state, FileState::Cached);
     }
-
