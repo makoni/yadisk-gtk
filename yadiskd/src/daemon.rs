@@ -9,11 +9,11 @@ use md5::Context as Md5Context;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient, YadiskClient};
-use yadisk_integrations::ids::{DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
+use yadisk_integrations::ids::{DBUS_NAME_SYNC, DBUS_OBJECT_PATH_CONTROL, DBUS_OBJECT_PATH_SYNC};
 use zbus::connection::Builder as ConnectionBuilder;
 use zbus::object_server::SignalEmitter;
 
-use crate::dbus_api::SyncDbusService;
+use crate::dbus_api::{ControlDbusService, SyncDbusService};
 use crate::oauth_flow::OAuthFlow;
 use crate::storage::{OAuthState, TokenStorage};
 use crate::sync::engine::SyncEngine;
@@ -122,6 +122,10 @@ impl DaemonRuntime {
             .serve_at(
                 DBUS_OBJECT_PATH_SYNC,
                 SyncDbusService::with_engine(Arc::clone(&self.engine)),
+            )?
+            .serve_at(
+                DBUS_OBJECT_PATH_CONTROL,
+                ControlDbusService::with_engine(Arc::clone(&self.engine)),
             )?
             .build()
             .await
@@ -356,12 +360,16 @@ impl DaemonRuntime {
         let signal_emitter = SignalEmitter::new(&dbus_connection, DBUS_OBJECT_PATH_SYNC)
             .context("failed to create D-Bus signal emitter")?
             .into_owned();
+        let control_signal_emitter = SignalEmitter::new(&dbus_connection, DBUS_OBJECT_PATH_CONTROL)
+            .context("failed to create control D-Bus signal emitter")?
+            .into_owned();
         let engine_for_signals = Arc::clone(&self.engine);
         let signal_root = self.config.remote_root.clone();
         let tray_state_tx_signal = tray_state_tx.clone();
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
             let mut known_tray_state: Option<TraySyncState> = None;
+            let mut known_daemon_state: Option<(&'static str, &'static str)> = None;
             let mut last_conflict_id = 0i64;
 
             loop {
@@ -393,6 +401,20 @@ impl DaemonRuntime {
                     if known_tray_state != Some(tray_state) {
                         let _ = tray_state_tx_signal.send(tray_state);
                         known_tray_state = Some(tray_state);
+                    }
+                    let daemon_state = match tray_state {
+                        TraySyncState::Normal => ("running", "idle"),
+                        TraySyncState::Syncing => ("busy", "queued or active operations"),
+                        TraySyncState::Error => ("error", "sync engine reported an error"),
+                    };
+                    if known_daemon_state != Some(daemon_state) {
+                        let _ = ControlDbusService::daemon_status_changed(
+                            &control_signal_emitter,
+                            daemon_state.0,
+                            daemon_state.1,
+                        )
+                        .await;
+                        known_daemon_state = Some(daemon_state);
                     }
                     known_states = current_states;
                 } else {

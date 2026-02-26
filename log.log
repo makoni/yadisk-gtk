@@ -1,0 +1,830 @@
+2026-02-25T15:01:46.3537408Z   Current runner version: '2.331.0'
+2026-02-25T15:01:46.3570710Z   ▾ Runner Image Provisioner
+2026-02-25T15:01:46.3572002Z     Hosted Compute Agent
+2026-02-25T15:01:46.3572849Z     Version: 20260123.484
+2026-02-25T15:01:46.3574076Z     Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+2026-02-25T15:01:46.3575323Z     Build Date: 2026-01-23T19:41:17Z
+2026-02-25T15:01:46.3576491Z     Worker ID: {aa6bc97b-33b2-417e-8dca-38d9f7314a49}
+2026-02-25T15:01:46.3577863Z     Azure Region: eastus2
+2026-02-25T15:01:46.3578830Z   
+2026-02-25T15:01:46.3581512Z   ▾ Operating System
+2026-02-25T15:01:46.3582581Z     Ubuntu
+2026-02-25T15:01:46.3583289Z     24.04.3
+2026-02-25T15:01:46.3584013Z     LTS
+2026-02-25T15:01:46.3584919Z   
+2026-02-25T15:01:46.3585668Z   ▾ Runner Image
+2026-02-25T15:01:46.3586541Z     Image: ubuntu-24.04
+2026-02-25T15:01:46.3587468Z     Version: 20260201.15.1
+2026-02-25T15:01:46.3589687Z     Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+2026-02-25T15:01:46.3592450Z     Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+2026-02-25T15:01:46.3594072Z   
+2026-02-25T15:01:46.3596060Z   ▾ GITHUB_TOKEN Permissions
+2026-02-25T15:01:46.3599125Z     Contents: read
+2026-02-25T15:01:46.3600261Z     Metadata: read
+2026-02-25T15:01:46.3601128Z     Packages: read
+2026-02-25T15:01:46.3602008Z   
+2026-02-25T15:01:46.3604854Z   Secret source: Actions
+2026-02-25T15:01:46.3605872Z   Prepare workflow directory
+2026-02-25T15:01:46.4165338Z   Prepare all required actions
+2026-02-25T15:01:46.4223149Z   Getting action download info
+2026-02-25T15:01:46.6431829Z   Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+2026-02-25T15:01:46.7540311Z   Download action repository 'dtolnay/rust-toolchain@stable' (SHA:631a55b12751854ce901bb631d5902ceb48146f7)
+2026-02-25T15:01:47.0718479Z   Complete job name: sandbox-portal-smoke
+2026-02-25T15:01:47.1389264Z   ▾ Run actions/checkout@v4
+2026-02-25T15:01:47.1390239Z     with:
+2026-02-25T15:01:47.1390649Z     repository: makoni/yadisk-gtk
+2026-02-25T15:01:47.1391294Z     token: ***
+2026-02-25T15:01:47.1391680Z     ssh-strict: true
+2026-02-25T15:01:47.1392083Z     ssh-user: git
+2026-02-25T15:01:47.1392487Z     persist-credentials: true
+2026-02-25T15:01:47.1392953Z     clean: true
+2026-02-25T15:01:47.1393360Z     sparse-checkout-cone-mode: true
+2026-02-25T15:01:47.1393843Z     fetch-depth: 1
+2026-02-25T15:01:47.1394230Z     fetch-tags: false
+2026-02-25T15:01:47.1394641Z     show-progress: true
+2026-02-25T15:01:47.1395056Z     lfs: false
+2026-02-25T15:01:47.1395434Z     submodules: false
+2026-02-25T15:01:47.1395849Z     set-safe-directory: true
+2026-02-25T15:01:47.1396482Z     env:
+2026-02-25T15:01:47.1396900Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.1397425Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.1397883Z   
+2026-02-25T15:01:47.2453374Z   Syncing repository: makoni/yadisk-gtk
+2026-02-25T15:01:47.2455163Z   ▾ Getting Git version info
+2026-02-25T15:01:47.2455892Z     Working directory is '/home/runner/work/yadisk-gtk/yadisk-gtk'
+2026-02-25T15:01:47.2456850Z     ▶ [command] /usr/bin/git version
+2026-02-25T15:01:47.2588142Z     git version 2.52.0
+2026-02-25T15:01:47.2613572Z   
+2026-02-25T15:01:47.2627381Z   Temporarily overriding HOME='/home/runner/work/_temp/136deff7-caaf-4b0d-ac70-9ef21128170f' before making global git config changes
+2026-02-25T15:01:47.2629279Z   Adding repository directory to the temporary git global config as a safe directory
+2026-02-25T15:01:47.2639726Z   ▶ [command] /usr/bin/git config --global --add safe.directory /home/runner/work/yadisk-gtk/yadisk-gtk
+2026-02-25T15:01:47.2676885Z   Deleting the contents of '/home/runner/work/yadisk-gtk/yadisk-gtk'
+2026-02-25T15:01:47.2680550Z   ▾ Initializing the repository
+2026-02-25T15:01:47.2684313Z     ▶ [command] /usr/bin/git init /home/runner/work/yadisk-gtk/yadisk-gtk
+2026-02-25T15:01:47.2792434Z     hint: Using 'master' as the name for the initial branch. This default branch name
+2026-02-25T15:01:47.2793718Z     hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-02-25T15:01:47.2794941Z     hint: to use in all of your new repositories, which will suppress this warning,
+2026-02-25T15:01:47.2795784Z     hint: call:
+2026-02-25T15:01:47.2796380Z     hint:
+2026-02-25T15:01:47.2797053Z     hint: 	git config --global init.defaultBranch <name>
+2026-02-25T15:01:47.2797648Z     hint:
+2026-02-25T15:01:47.2798201Z     hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-02-25T15:01:47.2799269Z     hint: 'development'. The just-created branch can be renamed via this command:
+2026-02-25T15:01:47.2799996Z     hint:
+2026-02-25T15:01:47.2800379Z     hint: 	git branch -m <name>
+2026-02-25T15:01:47.2800821Z     hint:
+2026-02-25T15:01:47.2801619Z     hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-02-25T15:01:47.2802671Z     Initialized empty Git repository in /home/runner/work/yadisk-gtk/yadisk-gtk/.git/
+2026-02-25T15:01:47.2807407Z     ▶ [command] /usr/bin/git remote add origin https://github.com/makoni/yadisk-gtk
+2026-02-25T15:01:47.2839570Z   
+2026-02-25T15:01:47.2840299Z   ▾ Disabling automatic garbage collection
+2026-02-25T15:01:47.2843660Z     ▶ [command] /usr/bin/git config --local gc.auto 0
+2026-02-25T15:01:47.2870454Z   
+2026-02-25T15:01:47.2871132Z   ▾ Setting up auth
+2026-02-25T15:01:47.2877328Z     ▶ [command] /usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-25T15:01:47.2905650Z     ▶ [command] /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-25T15:01:47.3254266Z     ▶ [command] /usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-25T15:01:47.3284823Z     ▶ [command] /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-25T15:01:47.3511706Z     ▶ [command] /usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-25T15:01:47.3555385Z     ▶ [command] /usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-25T15:01:47.3802053Z     ▶ [command] /usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-02-25T15:01:47.3840235Z   
+2026-02-25T15:01:47.3841154Z   ▾ Fetching the repository
+2026-02-25T15:01:47.3852564Z     ▶ [command] /usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e25ab52080ee49c71719e64dfedaca61d4a6c439:refs/remotes/origin/main
+2026-02-25T15:01:47.5960830Z     From https://github.com/makoni/yadisk-gtk
+2026-02-25T15:01:47.5962147Z     * [new ref]         e25ab52080ee49c71719e64dfedaca61d4a6c439 -> origin/main
+2026-02-25T15:01:47.5992919Z   
+2026-02-25T15:01:47.5993675Z   ▾ Determining the checkout info
+2026-02-25T15:01:47.5995302Z   
+2026-02-25T15:01:47.6000664Z   ▶ [command] /usr/bin/git sparse-checkout disable
+2026-02-25T15:01:47.6040314Z   ▶ [command] /usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-02-25T15:01:47.6064725Z   ▾ Checking out the ref
+2026-02-25T15:01:47.6068420Z     ▶ [command] /usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-02-25T15:01:47.6161348Z     Switched to a new branch 'main'
+2026-02-25T15:01:47.6164267Z     branch 'main' set up to track 'origin/main'.
+2026-02-25T15:01:47.6171604Z   
+2026-02-25T15:01:47.6205573Z   ▶ [command] /usr/bin/git log -1 --format=%H
+2026-02-25T15:01:47.6226947Z   e25ab52080ee49c71719e64dfedaca61d4a6c439
+2026-02-25T15:01:47.6564717Z   ▾ Run dtolnay/rust-toolchain@stable
+2026-02-25T15:01:47.6565348Z     with:
+2026-02-25T15:01:47.6565707Z     toolchain: stable
+2026-02-25T15:01:47.6566083Z     env:
+2026-02-25T15:01:47.6566455Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.6566977Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.6567421Z   
+2026-02-25T15:01:47.6683742Z   ▾ Run : parse toolchain version
+2026-02-25T15:01:47.6684354Z     : parse toolchain version
+2026-02-25T15:01:47.6684867Z     if [[ -z $toolchain ]]; then
+2026-02-25T15:01:47.6685777Z       # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070
+2026-02-25T15:01:47.6686741Z       echo "'toolchain' is a required input" >&2
+2026-02-25T15:01:47.6687285Z       exit 1
+2026-02-25T15:01:47.6687888Z     elif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then
+2026-02-25T15:01:47.6688650Z       if [[ Linux == macOS ]]; then
+2026-02-25T15:01:47.6689697Z         echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6690580Z       else
+2026-02-25T15:01:47.6691287Z         echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6692092Z       fi
+2026-02-25T15:01:47.6692632Z     elif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then
+2026-02-25T15:01:47.6693557Z       echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6694366Z     elif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then
+2026-02-25T15:01:47.6695287Z       echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6696167Z     else
+2026-02-25T15:01:47.6696640Z       echo "toolchain=$toolchain" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6697193Z     fi
+2026-02-25T15:01:47.6733113Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:47.6733746Z     env:
+2026-02-25T15:01:47.6734128Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.6734655Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.6735137Z     toolchain: stable
+2026-02-25T15:01:47.6735523Z   
+2026-02-25T15:01:47.6885811Z   ▾ Run : construct rustup command line
+2026-02-25T15:01:47.6886389Z     : construct rustup command line
+2026-02-25T15:01:47.6887181Z     echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6888270Z     echo "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6889393Z     echo "downgrade=" >> $GITHUB_OUTPUT
+2026-02-25T15:01:47.6918042Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:47.6918659Z     env:
+2026-02-25T15:01:47.6919259Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.6919787Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.6920251Z     targets: 
+2026-02-25T15:01:47.6920603Z     components: 
+2026-02-25T15:01:47.6920974Z   
+2026-02-25T15:01:47.7007251Z   ▾ Run : set $CARGO_HOME
+2026-02-25T15:01:47.7007745Z     : set $CARGO_HOME
+2026-02-25T15:01:47.7008337Z     echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+2026-02-25T15:01:47.7036946Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:47.7037551Z     env:
+2026-02-25T15:01:47.7037930Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.7038446Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.7039217Z   
+2026-02-25T15:01:47.7196001Z   ▾ Run : install rustup if needed
+2026-02-25T15:01:47.7196552Z     : install rustup if needed
+2026-02-25T15:01:47.7197107Z     if ! command -v rustup &>/dev/null; then
+2026-02-25T15:01:47.7198563Z       curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y
+2026-02-25T15:01:47.7200357Z       echo "$CARGO_HOME/bin" >> $GITHUB_PATH
+2026-02-25T15:01:47.7200891Z     fi
+2026-02-25T15:01:47.7230114Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:47.7230877Z     env:
+2026-02-25T15:01:47.7231257Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.7231779Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.7232248Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:47.7232707Z   
+2026-02-25T15:01:47.7319242Z   ▾ Run rustup toolchain install stable --profile minimal --no-self-update
+2026-02-25T15:01:47.7320208Z     rustup toolchain install stable --profile minimal --no-self-update
+2026-02-25T15:01:47.7348853Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:47.7349658Z     env:
+2026-02-25T15:01:47.7350066Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:47.7350612Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:47.7351131Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:47.7351656Z     RUSTUP_PERMIT_COPY_RENAME: 1
+2026-02-25T15:01:47.7352140Z   
+2026-02-25T15:01:47.9404268Z   info: syncing channel updates for 'stable-x86_64-unknown-linux-gnu'
+2026-02-25T15:01:48.0309457Z   info: latest update on 2026-02-12, rust version 1.93.1 (01f6ddf75 2026-02-11)
+2026-02-25T15:01:48.0549503Z   info: downloading component 'clippy'
+2026-02-25T15:01:48.1131766Z   info: downloading component 'rustfmt'
+2026-02-25T15:01:48.1672775Z   info: downloading component 'cargo'
+2026-02-25T15:01:48.2508686Z   info: downloading component 'rust-std'
+2026-02-25T15:01:48.4211386Z   info: downloading component 'rustc'
+2026-02-25T15:01:48.8238120Z   info: removing previous version of component 'clippy'
+2026-02-25T15:01:48.8253671Z   info: removing previous version of component 'rustfmt'
+2026-02-25T15:01:48.8265653Z   info: removing previous version of component 'cargo'
+2026-02-25T15:01:48.8313299Z   info: removing previous version of component 'rust-std'
+2026-02-25T15:01:48.8345059Z   info: removing previous version of component 'rustc'
+2026-02-25T15:01:48.8399631Z   info: installing component 'clippy'
+2026-02-25T15:01:49.2127976Z   info: installing component 'rustfmt'
+2026-02-25T15:01:49.4429286Z   info: installing component 'cargo'
+2026-02-25T15:01:50.1395668Z   info: installing component 'rust-std'
+2026-02-25T15:01:52.0371235Z   info: installing component 'rustc'
+2026-02-25T15:01:56.6132800Z
+2026-02-25T15:01:56.6223433Z   stable-x86_64-unknown-linux-gnu updated - rustc 1.93.1 (01f6ddf75 2026-02-11) (from rustc 1.93.0 (254b59607 2026-01-19))
+2026-02-25T15:01:56.6224451Z
+2026-02-25T15:01:56.6276122Z   ▾ Run rustup default stable
+2026-02-25T15:01:56.6276467Z     rustup default stable
+2026-02-25T15:01:56.6309558Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.6309912Z     env:
+2026-02-25T15:01:56.6310150Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.6310428Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.6310683Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.6310915Z   
+2026-02-25T15:01:56.6413485Z   info: using existing install for 'stable-x86_64-unknown-linux-gnu'
+2026-02-25T15:01:56.6697422Z   info: default toolchain set to 'stable-x86_64-unknown-linux-gnu'
+2026-02-25T15:01:56.6698019Z
+2026-02-25T15:01:56.6779757Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.93.1 (01f6ddf75 2026-02-11)
+2026-02-25T15:01:56.6780318Z
+2026-02-25T15:01:56.6825089Z   ▾ Run : create cachekey
+2026-02-25T15:01:56.6825419Z     : create cachekey
+2026-02-25T15:01:56.6825928Z     DATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-02-25T15:01:56.6826585Z     HASH=$(rustc +stable --version --verbose | sed -ne 's/^commit-hash: //p')
+2026-02-25T15:01:56.6827333Z     echo "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT
+2026-02-25T15:01:56.6860500Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.6860836Z     env:
+2026-02-25T15:01:56.6861047Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.6861339Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.6861590Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.6861998Z   
+2026-02-25T15:01:56.7241615Z   ▾ Run : disable incremental compilation
+2026-02-25T15:01:56.7241972Z     : disable incremental compilation
+2026-02-25T15:01:56.7242286Z     if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-02-25T15:01:56.7242608Z       echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV
+2026-02-25T15:01:56.7242878Z     fi
+2026-02-25T15:01:56.7276017Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.7276359Z     env:
+2026-02-25T15:01:56.7276571Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.7276857Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.7277118Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.7277354Z   
+2026-02-25T15:01:56.7348283Z   ▾ Run : enable colors in Cargo output
+2026-02-25T15:01:56.7348605Z     : enable colors in Cargo output
+2026-02-25T15:01:56.7348901Z     if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-02-25T15:01:56.7349486Z       echo CARGO_TERM_COLOR=always >> $GITHUB_ENV
+2026-02-25T15:01:56.7349792Z     fi
+2026-02-25T15:01:56.7379519Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.7379857Z     env:
+2026-02-25T15:01:56.7380060Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.7380338Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.7380581Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.7380824Z     CARGO_INCREMENTAL: 0
+2026-02-25T15:01:56.7381029Z   
+2026-02-25T15:01:56.7455113Z   ▾ Run : enable Cargo sparse registry
+2026-02-25T15:01:56.7455437Z     : enable Cargo sparse registry
+2026-02-25T15:01:56.7455800Z     # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-02-25T15:01:56.7456518Z     if [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then
+2026-02-25T15:01:56.7457250Z       if rustc +stable --version --verbose | grep -q '^release: 1\.6[89]\.'; then
+2026-02-25T15:01:56.7457816Z         touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true
+2026-02-25T15:01:56.7458370Z         echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV
+2026-02-25T15:01:56.7458866Z       elif rustc +stable --version --verbose | grep -q '^release: 1\.6[67]\.'; then
+2026-02-25T15:01:56.7459643Z         touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true
+2026-02-25T15:01:56.7460190Z         echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV
+2026-02-25T15:01:56.7460531Z       fi
+2026-02-25T15:01:56.7460738Z     fi
+2026-02-25T15:01:56.7490953Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.7491294Z     env:
+2026-02-25T15:01:56.7491505Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.7491792Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.7492045Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.7492295Z     CARGO_INCREMENTAL: 0
+2026-02-25T15:01:56.7492513Z     CARGO_TERM_COLOR: always
+2026-02-25T15:01:56.7492727Z   
+2026-02-25T15:01:56.7848542Z   ▾ Run : work around spurious network errors in curl 8.0
+2026-02-25T15:01:56.7849216Z     : work around spurious network errors in curl 8.0
+2026-02-25T15:01:56.7849782Z     # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-02-25T15:01:56.7850397Z     if rustc +stable --version --verbose | grep -q '^release: 1\.7[01]\.'; then
+2026-02-25T15:01:56.7851029Z       echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV
+2026-02-25T15:01:56.7851342Z     fi
+2026-02-25T15:01:56.7884757Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.7885096Z     env:
+2026-02-25T15:01:56.7885314Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.7885593Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.7885850Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.7886268Z     CARGO_INCREMENTAL: 0
+2026-02-25T15:01:56.7886477Z     CARGO_TERM_COLOR: always
+2026-02-25T15:01:56.7886693Z   
+2026-02-25T15:01:56.8103277Z   ▾ Run rustc +stable --version --verbose
+2026-02-25T15:01:56.8103636Z     rustc +stable --version --verbose
+2026-02-25T15:01:56.8136488Z     shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-25T15:01:56.8136844Z     env:
+2026-02-25T15:01:56.8137057Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.8137340Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.8137596Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.8137854Z     CARGO_INCREMENTAL: 0
+2026-02-25T15:01:56.8138072Z     CARGO_TERM_COLOR: always
+2026-02-25T15:01:56.8138290Z   
+2026-02-25T15:01:56.8310657Z   rustc 1.93.1 (01f6ddf75 2026-02-11)
+2026-02-25T15:01:56.8311851Z   binary: rustc
+2026-02-25T15:01:56.8312682Z   commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
+2026-02-25T15:01:56.8313277Z   commit-date: 2026-02-11
+2026-02-25T15:01:56.8313706Z   host: x86_64-unknown-linux-gnu
+2026-02-25T15:01:56.8314096Z   release: 1.93.1
+2026-02-25T15:01:56.8315098Z   LLVM version: 21.1.8
+2026-02-25T15:01:56.8390603Z   ▾ Run cargo test -p yadiskd storage::secret_portal::tests::parses_truthy_flags -- --nocapture
+2026-02-25T15:01:56.8391347Z     cargo test -p yadiskd storage::secret_portal::tests::parses_truthy_flags -- --nocapture
+2026-02-25T15:01:56.8392022Z     cargo test -p yadiskd tests::retries_once_after_unauthorized_with_refreshed_token -- --nocapture
+2026-02-25T15:01:56.8426516Z     shell: /usr/bin/bash -e {0}
+2026-02-25T15:01:56.8426767Z     env:
+2026-02-25T15:01:56.8426976Z     FLATPAK_ID: me.spaceinbox.yadisk.Gtk
+2026-02-25T15:01:56.8427260Z     YADISK_ENABLE_SECRET_PORTAL: 1
+2026-02-25T15:01:56.8427514Z     CARGO_HOME: /home/runner/.cargo
+2026-02-25T15:01:56.8427767Z     CARGO_INCREMENTAL: 0
+2026-02-25T15:01:56.8427983Z     CARGO_TERM_COLOR: always
+2026-02-25T15:01:56.8428201Z   
+2026-02-25T15:01:56.9206111Z       Updating crates.io index
+2026-02-25T15:01:58.2368488Z    Downloading crates ...
+2026-02-25T15:01:58.3753328Z     Downloaded crypto-common v0.1.7
+2026-02-25T15:01:58.3788116Z     Downloaded futures-task v0.3.31
+2026-02-25T15:01:58.3817524Z     Downloaded fastrand v2.3.0
+2026-02-25T15:01:58.3840543Z     Downloaded futures-channel v0.3.31
+2026-02-25T15:01:58.3868599Z     Downloaded base64ct v1.8.3
+2026-02-25T15:01:58.3903047Z     Downloaded byteorder v1.5.0
+2026-02-25T15:01:58.3928568Z     Downloaded hyper-tls v0.6.0
+2026-02-25T15:01:58.3950336Z     Downloaded atoi v2.0.0
+2026-02-25T15:01:58.4023904Z     Downloaded num v0.4.3
+2026-02-25T15:01:58.4043007Z     Downloaded potential_utf v0.1.4
+2026-02-25T15:01:58.4074612Z     Downloaded icu_normalizer_data v2.1.1
+2026-02-25T15:01:58.4111357Z     Downloaded num-traits v0.2.19
+2026-02-25T15:01:58.4151343Z     Downloaded rand v0.9.2
+2026-02-25T15:01:58.4205997Z     Downloaded powerfmt v0.2.0
+2026-02-25T15:01:58.4226444Z     Downloaded pin-utils v0.1.0
+2026-02-25T15:01:58.4246705Z     Downloaded itoa v1.0.17
+2026-02-25T15:01:58.4276581Z     Downloaded rand_chacha v0.3.1
+2026-02-25T15:01:58.4296261Z     Downloaded lazy_static v1.5.0
+2026-02-25T15:01:58.4331203Z     Downloaded ppv-lite86 v0.2.21
+2026-02-25T15:01:58.4356536Z     Downloaded same-file v1.0.6
+2026-02-25T15:01:58.4381329Z     Downloaded option-ext v0.2.0
+2026-02-25T15:01:58.4407199Z     Downloaded rustls-pki-types v1.14.0
+2026-02-25T15:01:58.4453344Z     Downloaded pkcs8 v0.10.2
+2026-02-25T15:01:58.4501487Z     Downloaded scopeguard v1.2.0
+2026-02-25T15:01:58.4521221Z     Downloaded pin-project-lite v0.2.16
+2026-02-25T15:01:58.4596890Z     Downloaded subtle v2.6.1
+2026-02-25T15:01:58.4624568Z     Downloaded sync_wrapper v1.0.2
+2026-02-25T15:01:58.4675864Z     Downloaded strsim v0.8.0
+2026-02-25T15:01:58.4677583Z     Downloaded stable_deref_trait v1.2.1
+2026-02-25T15:01:58.4694587Z     Downloaded stringprep v0.1.5
+2026-02-25T15:01:58.4718237Z     Downloaded slab v0.4.12
+2026-02-25T15:01:58.4750384Z     Downloaded try-lock v0.2.5
+2026-02-25T15:01:58.4774259Z     Downloaded unicode-properties v0.1.4
+2026-02-25T15:01:58.4808358Z     Downloaded tower-layer v0.3.3
+2026-02-25T15:01:58.4829361Z     Downloaded toml_datetime v0.7.5+spec-1.1.0
+2026-02-25T15:01:58.4851158Z     Downloaded tinyvec v1.10.0
+2026-02-25T15:01:58.4909339Z     Downloaded reqwest v0.12.28
+2026-02-25T15:01:58.4998784Z     Downloaded zvariant_utils v2.1.0
+2026-02-25T15:01:58.5025079Z     Downloaded webpki-roots v0.26.11
+2026-02-25T15:01:58.5046698Z     Downloaded zbus_names v3.0.0
+2026-02-25T15:01:58.5064867Z     Downloaded unicode-normalization v0.1.25
+2026-02-25T15:01:58.5130208Z     Downloaded walkdir v2.5.0
+2026-02-25T15:01:58.5157868Z     Downloaded zeroize_derive v1.4.3
+2026-02-25T15:01:58.5178308Z     Downloaded zerofrom-derive v0.1.6
+2026-02-25T15:01:58.5190858Z     Downloaded sqlx-mysql v0.8.6
+2026-02-25T15:01:58.5272794Z     Downloaded zvariant_derive v4.2.0
+2026-02-25T15:01:58.5298457Z     Downloaded zeroize v1.8.2
+2026-02-25T15:01:58.5324224Z     Downloaded zvariant_derive v5.9.2
+2026-02-25T15:01:58.5347922Z     Downloaded zbus_macros v5.13.2
+2026-02-25T15:01:58.5375978Z     Downloaded hkdf v0.12.4
+2026-02-25T15:01:58.5408739Z     Downloaded yoke v0.8.1
+2026-02-25T15:01:58.5436935Z     Downloaded zbus v4.4.0
+2026-02-25T15:01:58.5513101Z     Downloaded sqlx v0.8.6
+2026-02-25T15:01:58.5663524Z     Downloaded zbus v5.13.2
+2026-02-25T15:01:58.5764325Z     Downloaded webpki-roots v1.0.6
+2026-02-25T15:01:58.5806311Z     Downloaded unicode-width v0.1.14
+2026-02-25T15:01:58.5872701Z     Downloaded time v0.3.47
+2026-02-25T15:01:58.6016035Z     Downloaded tracing v0.1.44
+2026-02-25T15:01:58.6198373Z     Downloaded regex-automata v0.4.14
+2026-02-25T15:01:58.6344993Z     Downloaded zvariant v5.9.2
+2026-02-25T15:01:58.6415340Z     Downloaded zvariant v4.2.0
+2026-02-25T15:01:58.6458196Z     Downloaded zerotrie v0.2.3
+2026-02-25T15:01:58.6497932Z     Downloaded vec_map v0.8.2
+2026-02-25T15:01:58.6511959Z     Downloaded encoding_rs v0.8.35
+2026-02-25T15:01:58.6720145Z     Downloaded libc v0.2.180
+2026-02-25T15:01:58.7114803Z     Downloaded form_urlencoded v1.2.2
+2026-02-25T15:01:58.7125865Z     Downloaded dotenvy v0.15.7
+2026-02-25T15:01:58.7156292Z     Downloaded crc v3.4.0
+2026-02-25T15:01:58.7176641Z     Downloaded zerocopy v0.8.39
+2026-02-25T15:01:58.7411449Z     Downloaded cpufeatures v0.2.17
+2026-02-25T15:01:58.7427868Z     Downloaded generic-array v0.14.7
+2026-02-25T15:01:58.7444469Z     Downloaded aead v0.5.2
+2026-02-25T15:01:58.7459470Z     Downloaded concurrent-queue v2.5.0
+2026-02-25T15:01:58.7480800Z     Downloaded foreign-types v0.3.2
+2026-02-25T15:01:58.7491100Z     Downloaded atomic-waker v1.1.2
+2026-02-25T15:01:58.7508003Z     Downloaded serde v1.0.228
+2026-02-25T15:01:58.7547211Z     Downloaded cc v1.2.55
+2026-02-25T15:01:58.7580410Z     Downloaded bytes v1.11.1
+2026-02-25T15:01:58.7624665Z     Downloaded libdbus-sys v0.2.7
+2026-02-25T15:01:58.7943427Z     Downloaded serde_derive v1.0.228
+2026-02-25T15:01:58.7975570Z     Downloaded sha1 v0.10.6
+2026-02-25T15:01:58.7994285Z     Downloaded http-body v1.0.1
+2026-02-25T15:01:58.8006580Z     Downloaded tokio v1.49.0
+2026-02-25T15:01:58.8448067Z     Downloaded tower-service v0.3.3
+2026-02-25T15:01:58.8457496Z     Downloaded heck v0.5.0
+2026-02-25T15:01:58.8476933Z     Downloaded enumflags2 v0.7.12
+2026-02-25T15:01:58.8492840Z     Downloaded displaydoc v0.2.5
+2026-02-25T15:01:58.8524732Z     Downloaded hyper v1.8.1
+2026-02-25T15:01:58.8593641Z     Downloaded cfg-if v1.0.4
+2026-02-25T15:01:58.8607714Z     Downloaded async-trait v0.1.89
+2026-02-25T15:01:58.8645372Z     Downloaded http v1.4.0
+2026-02-25T15:01:58.8683928Z     Downloaded der v0.7.10
+2026-02-25T15:01:58.8739396Z     Downloaded hmac v0.12.1
+2026-02-25T15:01:58.8760693Z     Downloaded futures-util v0.3.31
+2026-02-25T15:01:58.8890160Z     Downloaded serde_repr v0.1.20
+2026-02-25T15:01:58.8910656Z     Downloaded ring v0.17.14
+2026-02-25T15:01:58.9328713Z     Downloaded zvariant_utils v3.3.0
+2026-02-25T15:01:58.9344951Z     Downloaded event-listener v5.4.1
+2026-02-25T15:01:58.9365575Z     Downloaded block-buffer v0.10.4
+2026-02-25T15:01:58.9378365Z     Downloaded chacha20poly1305 v0.10.1
+2026-02-25T15:01:58.9399386Z     Downloaded dirs-sys v0.5.0
+2026-02-25T15:01:58.9411305Z     Downloaded serde_json v1.0.149
+2026-02-25T15:01:58.9485468Z     Downloaded flume v0.11.1
+2026-02-25T15:01:58.9520708Z     Downloaded dbus-secret-service v4.1.0
+2026-02-25T15:01:58.9540664Z     Downloaded cipher v0.4.4
+2026-02-25T15:01:58.9556659Z     Downloaded cbc v0.1.2
+2026-02-25T15:01:58.9572752Z     Downloaded async-broadcast v0.7.2
+2026-02-25T15:01:58.9590431Z     Downloaded serde_core v1.0.228
+2026-02-25T15:01:58.9619205Z     Downloaded assert-json-diff v2.0.2
+2026-02-25T15:01:58.9634110Z     Downloaded serde_urlencoded v0.7.1
+2026-02-25T15:01:58.9650964Z     Downloaded http-body-util v0.1.3
+2026-02-25T15:01:58.9679800Z     Downloaded find-msvc-tools v0.1.9
+2026-02-25T15:01:58.9696950Z     Downloaded event-listener-strategy v0.5.4
+2026-02-25T15:01:58.9709471Z     Downloaded equivalent v1.0.2
+2026-02-25T15:01:58.9720121Z     Downloaded hashbrown v0.16.1
+2026-02-25T15:01:58.9772444Z     Downloaded dbus-tree v0.9.2
+2026-02-25T15:01:58.9787272Z     Downloaded deadpool v0.12.3
+2026-02-25T15:01:58.9817557Z     Downloaded dbus-codegen v0.9.1
+2026-02-25T15:01:58.9832770Z     Downloaded crossbeam-utils v0.8.21
+2026-02-25T15:01:58.9860025Z     Downloaded bitflags v2.10.0
+2026-02-25T15:01:58.9902546Z     Downloaded atty v0.2.14
+2026-02-25T15:01:58.9913906Z     Downloaded ansi_term v0.12.1
+2026-02-25T15:01:58.9933587Z     Downloaded httpdate v1.0.3
+2026-02-25T15:01:58.9945928Z     Downloaded hashlink v0.10.0
+2026-02-25T15:01:58.9964730Z     Downloaded h2 v0.4.13
+2026-02-25T15:01:59.0039225Z     Downloaded futures-sink v0.3.31
+2026-02-25T15:01:59.0048805Z     Downloaded futures-lite v2.6.1
+2026-02-25T15:01:59.0066602Z     Downloaded futures-core v0.3.31
+2026-02-25T15:01:59.0080228Z     Downloaded foreign-types-shared v0.1.1
+2026-02-25T15:01:59.0088644Z     Downloaded fnv v1.0.7
+2026-02-25T15:01:59.0098397Z     Downloaded deranged v0.5.6
+2026-02-25T15:01:59.0114553Z     Downloaded cfg_aliases v0.2.1
+2026-02-25T15:01:59.0125810Z     Downloaded base64 v0.22.1
+2026-02-25T15:01:59.0164775Z     Downloaded zerovec v0.11.5
+2026-02-25T15:01:59.0218910Z     Downloaded aes v0.8.4
+2026-02-25T15:01:59.0253924Z     Downloaded allocator-api2 v0.2.21
+2026-02-25T15:01:59.0280135Z     Downloaded home v0.5.12
+2026-02-25T15:01:59.0290725Z     Downloaded chacha20 v0.9.1
+2026-02-25T15:01:59.0309466Z     Downloaded deadpool-runtime v0.1.4
+2026-02-25T15:01:59.0318640Z     Downloaded tempfile v3.24.0
+2026-02-25T15:01:59.0344619Z     Downloaded vcpkg v0.2.15
+2026-02-25T15:01:59.0893980Z     Downloaded winnow v0.7.14
+2026-02-25T15:01:59.0988362Z     Downloaded rustix v1.1.3
+2026-02-25T15:01:59.1255398Z     Downloaded either v1.15.0
+2026-02-25T15:01:59.1270089Z     Downloaded xml-rs v0.8.28
+2026-02-25T15:01:59.1299217Z     Downloaded unicode-ident v1.0.23
+2026-02-25T15:01:59.1328508Z     Downloaded unicode-bidi v0.3.18
+2026-02-25T15:01:59.1353098Z     Downloaded toml_edit v0.23.10+spec-1.0.0
+2026-02-25T15:01:59.1392112Z     Downloaded tokio-macros v2.6.0
+2026-02-25T15:01:59.1404337Z     Downloaded syn v2.0.114
+2026-02-25T15:01:59.1508885Z     Downloaded zbus_names v4.3.1
+2026-02-25T15:01:59.1524601Z     Downloaded zbus_macros v4.4.0
+2026-02-25T15:01:59.1539332Z     Downloaded linux-raw-sys v0.11.0
+2026-02-25T15:01:59.2079725Z     Downloaded url v2.5.8
+2026-02-25T15:01:59.2106462Z     Downloaded textwrap v0.11.0
+2026-02-25T15:01:59.2123553Z     Downloaded rustls v0.23.36
+2026-02-25T15:01:59.2239650Z     Downloaded zerovec-derive v0.11.2
+2026-02-25T15:01:59.2254232Z     Downloaded zerofrom v0.1.6
+2026-02-25T15:01:59.2263939Z     Downloaded yoke-derive v0.8.1
+2026-02-25T15:01:59.2274390Z     Downloaded hashbrown v0.15.5
+2026-02-25T15:01:59.2324602Z     Downloaded futures-intrusive v0.5.0
+2026-02-25T15:01:59.2369559Z     Downloaded foldhash v0.1.5
+2026-02-25T15:01:59.2382593Z     Downloaded xdg-home v1.3.0
+2026-02-25T15:01:59.2393031Z     Downloaded wiremock v0.6.5
+2026-02-25T15:01:59.2422931Z     Downloaded whoami v1.6.1
+2026-02-25T15:01:59.2444012Z     Downloaded regex-syntax v0.8.9
+2026-02-25T15:01:59.2511591Z     Downloaded nix v0.29.0
+2026-02-25T15:01:59.2620670Z     Downloaded dbus v0.9.10
+2026-02-25T15:01:59.2663151Z     Downloaded writeable v0.6.2
+2026-02-25T15:01:59.2681438Z     Downloaded want v0.3.1
+2026-02-25T15:01:59.2691054Z     Downloaded tracing-attributes v0.1.31
+2026-02-25T15:01:59.2718125Z     Downloaded tokio-rustls v0.26.4
+2026-02-25T15:01:59.2739163Z     Downloaded thiserror-impl v2.0.18
+2026-02-25T15:01:59.2753881Z     Downloaded static_assertions v1.1.0
+2026-02-25T15:01:59.2769188Z     Downloaded socket2 v0.6.2
+2026-02-25T15:01:59.2787173Z     Downloaded openssl v0.10.75
+2026-02-25T15:01:59.2882373Z     Downloaded getrandom v0.3.4
+2026-02-25T15:01:59.2915867Z     Downloaded futures-macro v0.3.31
+2026-02-25T15:01:59.2926498Z     Downloaded errno v0.3.14
+2026-02-25T15:01:59.2942797Z     Downloaded clap v2.34.0
+2026-02-25T15:01:59.3004451Z     Downloaded bitflags v1.3.2
+2026-02-25T15:01:59.3036603Z     Downloaded utf8_iter v1.0.4
+2026-02-25T15:01:59.3047226Z     Downloaded untrusted v0.9.0
+2026-02-25T15:01:59.3064056Z     Downloaded universal-hash v0.5.1
+2026-02-25T15:01:59.3073289Z     Downloaded typenum v1.19.0
+2026-02-25T15:01:59.3101429Z     Downloaded tower-http v0.6.8
+2026-02-25T15:01:59.3184693Z     Downloaded getrandom v0.2.17
+2026-02-25T15:01:59.3213350Z     Downloaded futures-io v0.3.31
+2026-02-25T15:01:59.3222336Z     Downloaded futures v0.3.31
+2026-02-25T15:01:59.3271714Z     Downloaded uuid v1.20.0
+2026-02-25T15:01:59.3300467Z     Downloaded quinn-proto v0.11.13
+2026-02-25T15:01:59.3366424Z     Downloaded hex v0.4.3
+2026-02-25T15:01:59.3382636Z     Downloaded futures-executor v0.3.31
+2026-02-25T15:01:59.3396342Z     Downloaded crossbeam-queue v0.3.12
+2026-02-25T15:01:59.3408628Z     Downloaded version_check v0.9.5
+2026-02-25T15:01:59.3422956Z     Downloaded tracing-core v0.1.36
+2026-02-25T15:01:59.3450184Z     Downloaded tokio-util v0.7.18
+2026-02-25T15:01:59.3525420Z     Downloaded sqlx-postgres v0.8.6
+2026-02-25T15:01:59.3611269Z     Downloaded poly1305 v0.8.0
+2026-02-25T15:01:59.3635922Z     Downloaded libm v0.2.16
+2026-02-25T15:01:59.3742963Z     Downloaded httparse v1.10.1
+2026-02-25T15:01:59.3769621Z     Downloaded filetime v0.2.27
+2026-02-25T15:01:59.3786109Z     Downloaded zmij v1.0.20
+2026-02-25T15:01:59.3804643Z     Downloaded tower v0.5.3
+2026-02-25T15:01:59.3904478Z     Downloaded toml_parser v1.0.6+spec-1.1.0
+2026-02-25T15:01:59.3926804Z     Downloaded sqlx-core v0.8.6
+2026-02-25T15:01:59.4005058Z     Downloaded regex v1.12.3
+2026-02-25T15:01:59.4058302Z     Downloaded indexmap v2.13.0
+2026-02-25T15:01:59.4101184Z     Downloaded libsqlite3-sys v0.30.1
+2026-02-25T15:01:59.4690021Z     Downloaded idna v1.1.0
+2026-02-25T15:01:59.4725017Z     Downloaded endi v1.1.1
+2026-02-25T15:01:59.4736668Z     Downloaded digest v0.10.7
+2026-02-25T15:01:59.4754406Z     Downloaded crossbeam-channel v0.5.15
+2026-02-25T15:01:59.4794247Z     Downloaded const-oid v0.9.6
+2026-02-25T15:01:59.4813379Z     Downloaded block-padding v0.3.3
+2026-02-25T15:01:59.4822670Z     Downloaded enumflags2_derive v0.7.12
+2026-02-25T15:01:59.4831099Z     Downloaded dirs v6.0.0
+2026-02-25T15:01:59.4844550Z     Downloaded autocfg v1.5.0
+2026-02-25T15:01:59.4863545Z     Downloaded tinystr v0.8.2
+2026-02-25T15:01:59.4882942Z     Downloaded sqlx-sqlite v0.8.6
+2026-02-25T15:01:59.4927461Z     Downloaded ordered-stream v0.2.0
+2026-02-25T15:01:59.4939307Z     Downloaded tokio-stream v0.1.18
+2026-02-25T15:01:59.4986210Z     Downloaded tokio-native-tls v0.3.1
+2026-02-25T15:01:59.5003548Z     Downloaded pkcs1 v0.7.5
+2026-02-25T15:01:59.5027125Z     Downloaded mio v1.1.1
+2026-02-25T15:01:59.5086171Z     Downloaded tinyvec_macros v0.1.1
+2026-02-25T15:01:59.5094470Z     Downloaded thiserror v2.0.18
+2026-02-25T15:01:59.5157438Z     Downloaded thiserror v1.0.69
+2026-02-25T15:01:59.5212001Z     Downloaded rustls-webpki v0.103.9
+2026-02-25T15:01:59.5242271Z     Downloaded rand_core v0.9.5
+2026-02-25T15:01:59.5255374Z     Downloaded parking_lot_core v0.9.12
+2026-02-25T15:01:59.5276342Z     Downloaded hyper-rustls v0.27.7
+2026-02-25T15:01:59.5300029Z     Downloaded time-macros v0.2.27
+2026-02-25T15:01:59.5322052Z     Downloaded thiserror-impl v1.0.69
+2026-02-25T15:01:59.5335102Z     Downloaded spin v0.9.8
+2026-02-25T15:01:59.5358905Z     Downloaded quinn v0.11.9
+2026-02-25T15:01:59.5391159Z     Downloaded percent-encoding v2.3.2
+2026-02-25T15:01:59.5399921Z     Downloaded mio v0.8.11
+2026-02-25T15:01:59.5456279Z     Downloaded iri-string v0.7.10
+2026-02-25T15:01:59.5531524Z     Downloaded time-core v0.1.8
+2026-02-25T15:01:59.5542048Z     Downloaded synstructure v0.13.2
+2026-02-25T15:01:59.5552354Z     Downloaded spki v0.7.3
+2026-02-25T15:01:59.5569959Z     Downloaded smallvec v1.15.1
+2026-02-25T15:01:59.5590901Z     Downloaded signature v2.2.0
+2026-02-25T15:01:59.5605851Z     Downloaded openssl-sys v0.9.111
+2026-02-25T15:01:59.5661169Z     Downloaded shlex v1.3.0
+2026-02-25T15:01:59.5673981Z     Downloaded num-integer v0.1.46
+2026-02-25T15:01:59.5690126Z     Downloaded sqlx-macros-core v0.8.6
+2026-02-25T15:01:59.5711414Z     Downloaded rand v0.8.5
+2026-02-25T15:01:59.5746214Z     Downloaded signal-hook-registry v1.4.8
+2026-02-25T15:01:59.5758680Z     Downloaded rand_chacha v0.9.0
+2026-02-25T15:01:59.5773618Z     Downloaded secret-service v4.0.0
+2026-02-25T15:01:59.5798627Z     Downloaded parking_lot v0.12.5
+2026-02-25T15:01:59.5823700Z     Downloaded notify v6.1.1
+2026-02-25T15:01:59.5841426Z     Downloaded proc-macro-crate v3.4.0
+2026-02-25T15:01:59.5855124Z     Downloaded num-bigint-dig v0.8.6
+2026-02-25T15:01:59.5899602Z     Downloaded litemap v0.8.1
+2026-02-25T15:01:59.5921865Z     Downloaded ksni v0.2.2
+2026-02-25T15:01:59.5945405Z     Downloaded crc-catalog v2.4.0
+2026-02-25T15:01:59.5958477Z     Downloaded sqlx-macros v0.8.6
+2026-02-25T15:01:59.5967089Z     Downloaded sha2 v0.10.9
+2026-02-25T15:01:59.5992795Z     Downloaded ryu v1.0.23
+2026-02-25T15:01:59.6024935Z     Downloaded rsa v0.9.10
+2026-02-25T15:01:59.6076835Z     Downloaded quinn-udp v0.5.14
+2026-02-25T15:01:59.6094579Z     Downloaded pkg-config v0.3.32
+2026-02-25T15:01:59.6110827Z     Downloaded aho-corasick v1.1.4
+2026-02-25T15:01:59.6163439Z     Downloaded num-complex v0.4.6
+2026-02-25T15:01:59.6177905Z     Downloaded rand_core v0.6.4
+2026-02-25T15:01:59.6191673Z     Downloaded quote v1.0.44
+2026-02-25T15:01:59.6220792Z     Downloaded num-rational v0.4.2
+2026-02-25T15:01:59.6233219Z     Downloaded md5 v0.7.0
+2026-02-25T15:01:59.6243168Z     Downloaded lock_api v0.4.14
+2026-02-25T15:01:59.6255751Z     Downloaded anyhow v1.0.101
+2026-02-25T15:01:59.6295563Z     Downloaded pem-rfc7468 v0.7.0
+2026-02-25T15:01:59.6315415Z     Downloaded openssl-probe v0.1.6
+2026-02-25T15:01:59.6326757Z     Downloaded opaque-debug v0.3.1
+2026-02-25T15:01:59.6336406Z     Downloaded num-iter v0.1.45
+2026-02-25T15:01:59.6346121Z     Downloaded num-bigint v0.4.6
+2026-02-25T15:01:59.6392132Z     Downloaded md-5 v0.10.6
+2026-02-25T15:01:59.6407272Z     Downloaded lru-slab v0.1.2
+2026-02-25T15:01:59.6415808Z     Downloaded keyring v3.6.3
+2026-02-25T15:01:59.6442661Z     Downloaded rustc-hash v2.1.1
+2026-02-25T15:01:59.6455687Z     Downloaded proc-macro2 v1.0.106
+2026-02-25T15:01:59.6485679Z     Downloaded once_cell v1.21.3
+2026-02-25T15:01:59.6510209Z     Downloaded mime v0.3.17
+2026-02-25T15:01:59.6523300Z     Downloaded idna_adapter v1.2.1
+2026-02-25T15:01:59.6532528Z     Downloaded native-tls v0.2.14
+2026-02-25T15:01:59.6552081Z     Downloaded memchr v2.8.0
+2026-02-25T15:01:59.6605177Z     Downloaded parking v2.2.1
+2026-02-25T15:01:59.6616098Z     Downloaded num-conv v0.2.0
+2026-02-25T15:01:59.6624599Z     Downloaded memoffset v0.9.1
+2026-02-25T15:01:59.6636872Z     Downloaded ashpd v0.12.1
+2026-02-25T15:01:59.6707238Z     Downloaded num_cpus v1.17.0
+2026-02-25T15:01:59.6739406Z     Downloaded inout v0.1.4
+2026-02-25T15:01:59.6750596Z     Downloaded inotify v0.9.6
+2026-02-25T15:01:59.6769438Z     Downloaded icu_properties_data v2.1.2
+2026-02-25T15:01:59.6870643Z     Downloaded icu_normalizer v2.1.1
+2026-02-25T15:01:59.6905398Z     Downloaded icu_collections v2.1.1
+2026-02-25T15:01:59.6965789Z     Downloaded hyper-util v0.1.20
+2026-02-25T15:01:59.7026655Z     Downloaded openssl-macros v0.1.1
+2026-02-25T15:01:59.7034286Z     Downloaded log v0.4.29
+2026-02-25T15:01:59.7058820Z     Downloaded inotify-sys v0.1.5
+2026-02-25T15:01:59.7068303Z     Downloaded icu_provider v2.1.1
+2026-02-25T15:01:59.7093546Z     Downloaded openssl-src v300.5.5+3.5.5
+2026-02-25T15:01:59.9287025Z     Downloaded icu_properties v2.1.2
+2026-02-25T15:01:59.9309263Z     Downloaded ipnet v2.11.0
+2026-02-25T15:01:59.9325132Z     Downloaded icu_locale_core v2.1.1
+2026-02-25T15:02:00.0195930Z      Compiling proc-macro2 v1.0.106
+2026-02-25T15:02:00.0196819Z      Compiling unicode-ident v1.0.23
+2026-02-25T15:02:00.0197577Z      Compiling quote v1.0.44
+2026-02-25T15:02:00.0218617Z      Compiling libc v0.2.180
+2026-02-25T15:02:00.0820177Z      Compiling cfg-if v1.0.4
+2026-02-25T15:02:00.1125981Z      Compiling find-msvc-tools v0.1.9
+2026-02-25T15:02:00.1980885Z      Compiling shlex v1.3.0
+2026-02-25T15:02:00.2771883Z      Compiling pin-project-lite v0.2.16
+2026-02-25T15:02:00.3165368Z      Compiling cc v1.2.55
+2026-02-25T15:02:00.3204865Z      Compiling futures-core v0.3.31
+2026-02-25T15:02:00.4079579Z      Compiling pkg-config v0.3.32
+2026-02-25T15:02:01.0364713Z      Compiling syn v2.0.114
+2026-02-25T15:02:01.0944437Z      Compiling serde_core v1.0.228
+2026-02-25T15:02:01.1913908Z      Compiling stable_deref_trait v1.2.1
+2026-02-25T15:02:01.2251478Z      Compiling typenum v1.19.0
+2026-02-25T15:02:01.2909604Z      Compiling version_check v0.9.5
+2026-02-25T15:02:01.4373315Z      Compiling bytes v1.11.1
+2026-02-25T15:02:01.5257666Z      Compiling generic-array v0.14.7
+2026-02-25T15:02:01.6337185Z      Compiling memchr v2.8.0
+2026-02-25T15:02:02.3875850Z      Compiling serde v1.0.228
+2026-02-25T15:02:02.5656254Z      Compiling once_cell v1.21.3
+2026-02-25T15:02:02.6781761Z      Compiling equivalent v1.0.2
+2026-02-25T15:02:02.7317630Z      Compiling mio v1.1.1
+2026-02-25T15:02:03.2403462Z      Compiling socket2 v0.6.2
+2026-02-25T15:02:03.2540478Z      Compiling futures-io v0.3.31
+2026-02-25T15:02:03.3496741Z      Compiling hashbrown v0.16.1
+2026-02-25T15:02:03.7509695Z      Compiling writeable v0.6.2
+2026-02-25T15:02:03.8803712Z      Compiling indexmap v2.13.0
+2026-02-25T15:02:03.8844150Z      Compiling litemap v0.8.1
+2026-02-25T15:02:03.9652440Z      Compiling futures-task v0.3.31
+2026-02-25T15:02:04.0191358Z      Compiling pin-utils v0.1.0
+2026-02-25T15:02:04.0527621Z      Compiling icu_normalizer_data v2.1.1
+2026-02-25T15:02:04.0725441Z      Compiling slab v0.4.12
+2026-02-25T15:02:04.1636418Z      Compiling crypto-common v0.1.7
+2026-02-25T15:02:04.1854626Z      Compiling log v0.4.29
+2026-02-25T15:02:04.2289498Z      Compiling itoa v1.0.17
+2026-02-25T15:02:04.3098419Z      Compiling icu_properties_data v2.1.2
+2026-02-25T15:02:04.4016808Z      Compiling errno v0.3.14
+2026-02-25T15:02:04.4191485Z      Compiling subtle v2.6.1
+2026-02-25T15:02:04.4903430Z      Compiling signal-hook-registry v1.4.8
+2026-02-25T15:02:04.5160542Z      Compiling synstructure v0.13.2
+2026-02-25T15:02:04.6124014Z      Compiling smallvec v1.15.1
+2026-02-25T15:02:04.7267163Z      Compiling autocfg v1.5.0
+2026-02-25T15:02:04.7678478Z      Compiling percent-encoding v2.3.2
+2026-02-25T15:02:04.8957760Z      Compiling futures-sink v0.3.31
+2026-02-25T15:02:04.9481675Z      Compiling ring v0.17.14
+2026-02-25T15:02:05.0391597Z      Compiling vcpkg v0.2.15
+2026-02-25T15:02:05.0455601Z      Compiling futures-channel v0.3.31
+2026-02-25T15:02:05.2073787Z      Compiling tracing-core v0.1.36
+2026-02-25T15:02:05.6278773Z      Compiling crossbeam-utils v0.8.21
+2026-02-25T15:02:05.7814926Z      Compiling utf8_iter v1.0.4
+2026-02-25T15:02:05.7921699Z      Compiling form_urlencoded v1.2.2
+2026-02-25T15:02:05.8637905Z      Compiling untrusted v0.9.0
+2026-02-25T15:02:05.9240500Z      Compiling block-buffer v0.10.4
+2026-02-25T15:02:05.9973269Z      Compiling scopeguard v1.2.0
+2026-02-25T15:02:06.0394621Z      Compiling cpufeatures v0.2.17
+2026-02-25T15:02:06.0733461Z      Compiling lock_api v0.4.14
+2026-02-25T15:02:06.2055734Z      Compiling zerofrom-derive v0.1.6
+2026-02-25T15:02:06.2485424Z      Compiling yoke-derive v0.8.1
+2026-02-25T15:02:06.3583889Z      Compiling zerovec-derive v0.11.2
+2026-02-25T15:02:07.1353349Z      Compiling displaydoc v0.2.5
+2026-02-25T15:02:07.2933810Z      Compiling zerofrom v0.1.6
+2026-02-25T15:02:07.3526547Z      Compiling serde_derive v1.0.228
+2026-02-25T15:02:07.3760392Z      Compiling yoke v0.8.1
+2026-02-25T15:02:07.4911898Z      Compiling zerovec v0.11.5
+2026-02-25T15:02:07.6292131Z      Compiling zerotrie v0.2.3
+2026-02-25T15:02:07.8547115Z      Compiling tinystr v0.8.2
+2026-02-25T15:02:07.8673140Z      Compiling potential_utf v0.1.4
+2026-02-25T15:02:07.9332514Z      Compiling icu_collections v2.1.1
+2026-02-25T15:02:07.9923350Z      Compiling icu_locale_core v2.1.1
+2026-02-25T15:02:08.3900691Z      Compiling tokio-macros v2.6.0
+2026-02-25T15:02:08.8489622Z      Compiling icu_provider v2.1.1
+2026-02-25T15:02:08.9138643Z      Compiling tokio v1.49.0
+2026-02-25T15:02:09.0531430Z      Compiling icu_properties v2.1.2
+2026-02-25T15:02:10.0950583Z      Compiling zeroize_derive v1.4.3
+2026-02-25T15:02:10.4892188Z      Compiling futures-macro v0.3.31
+2026-02-25T15:02:10.5164278Z      Compiling zeroize v1.8.2
+2026-02-25T15:02:10.6362664Z      Compiling tracing-attributes v0.1.31
+2026-02-25T15:02:10.9260595Z      Compiling futures-util v0.3.31
+2026-02-25T15:02:11.7343880Z      Compiling tracing v0.1.44
+2026-02-25T15:02:11.9350271Z      Compiling zmij v1.0.20
+2026-02-25T15:02:12.0830881Z      Compiling parking_lot_core v0.9.12
+2026-02-25T15:02:12.2061517Z      Compiling rustls v0.23.36
+2026-02-25T15:02:12.3046281Z      Compiling icu_normalizer v2.1.1
+2026-02-25T15:02:12.7498050Z      Compiling num-traits v0.2.19
+2026-02-25T15:02:12.8314629Z      Compiling getrandom v0.2.17
+2026-02-25T15:02:12.9606470Z      Compiling winnow v0.7.14
+2026-02-25T15:02:13.1040929Z      Compiling serde_json v1.0.149
+2026-02-25T15:02:13.1965003Z      Compiling parking v2.2.1
+2026-02-25T15:02:13.3711196Z      Compiling idna_adapter v1.2.1
+2026-02-25T15:02:13.6385781Z      Compiling concurrent-queue v2.5.0
+2026-02-25T15:02:13.8360175Z      Compiling event-listener v5.4.1
+2026-02-25T15:02:14.4330916Z      Compiling idna v1.1.0
+2026-02-25T15:02:15.0718484Z      Compiling rustls-pki-types v1.14.0
+2026-02-25T15:02:15.1174981Z      Compiling http v1.4.0
+2026-02-25T15:02:15.2554040Z      Compiling bitflags v2.10.0
+2026-02-25T15:02:15.3613006Z      Compiling url v2.5.8
+2026-02-25T15:02:15.4257486Z      Compiling toml_parser v1.0.6+spec-1.1.0
+2026-02-25T15:02:15.5256635Z      Compiling openssl-sys v0.9.111
+2026-02-25T15:02:15.9641921Z      Compiling toml_datetime v0.7.5+spec-1.1.0
+2026-02-25T15:02:16.0191590Z      Compiling thiserror v2.0.18
+2026-02-25T15:02:16.1351093Z      Compiling toml_edit v0.23.10+spec-1.0.0
+2026-02-25T15:02:16.2772337Z      Compiling http-body v1.0.1
+2026-02-25T15:02:16.3620734Z      Compiling thiserror-impl v2.0.18
+2026-02-25T15:02:16.6222621Z      Compiling httparse v1.10.1
+2026-02-25T15:02:16.8616295Z      Compiling base64 v0.22.1
+2026-02-25T15:02:17.1332243Z      Compiling foldhash v0.1.5
+2026-02-25T15:02:17.1806630Z      Compiling allocator-api2 v0.2.21
+2026-02-25T15:02:17.2654072Z      Compiling proc-macro-crate v3.4.0
+2026-02-25T15:02:17.4811167Z      Compiling hashbrown v0.15.5
+2026-02-25T15:02:17.5300505Z      Compiling zvariant_utils v3.3.0
+2026-02-25T15:02:17.6940242Z      Compiling rustls-webpki v0.103.9
+2026-02-25T15:02:18.0346078Z      Compiling tokio-util v0.7.18
+2026-02-25T15:02:18.6325234Z      Compiling enumflags2_derive v0.7.12
+2026-02-25T15:02:18.6415533Z      Compiling digest v0.10.7
+2026-02-25T15:02:18.8020903Z      Compiling block-padding v0.3.3
+2026-02-25T15:02:18.8833715Z      Compiling atomic-waker v1.1.2
+2026-02-25T15:02:18.9447497Z      Compiling tower-service v0.3.3
+2026-02-25T15:02:18.9630704Z      Compiling try-lock v0.2.5
+2026-02-25T15:02:18.9866752Z      Compiling crc-catalog v2.4.0
+2026-02-25T15:02:19.0170937Z      Compiling ryu v1.0.23
+2026-02-25T15:02:19.0353171Z      Compiling zerocopy v0.8.39
+2026-02-25T15:02:19.0520870Z      Compiling fnv v1.0.7
+2026-02-25T15:02:19.0940004Z      Compiling h2 v0.4.13
+2026-02-25T15:02:19.1504542Z      Compiling serde_urlencoded v0.7.1
+2026-02-25T15:02:19.2498198Z      Compiling enumflags2 v0.7.12
+2026-02-25T15:02:19.3048745Z      Compiling crc v3.4.0
+2026-02-25T15:02:19.3545826Z      Compiling want v0.3.1
+2026-02-25T15:02:19.4555820Z      Compiling inout v0.1.4
+2026-02-25T15:02:19.5455122Z      Compiling zvariant_derive v5.9.2
+2026-02-25T15:02:20.3610380Z      Compiling hashlink v0.10.0
+2026-02-25T15:02:20.8795044Z      Compiling webpki-roots v1.0.6
+2026-02-25T15:02:21.1566175Z      Compiling either v1.15.0
+2026-02-25T15:02:21.3569455Z      Compiling crossbeam-queue v0.3.12
+2026-02-25T15:02:21.4542275Z      Compiling spin v0.9.8
+2026-02-25T15:02:21.5934991Z      Compiling libsqlite3-sys v0.30.1
+2026-02-25T15:02:21.7883735Z      Compiling libdbus-sys v0.2.7
+2026-02-25T15:02:21.9470193Z      Compiling bitflags v1.3.2
+2026-02-25T15:02:21.9900388Z      Compiling httpdate v1.0.3
+2026-02-25T15:02:21.9997693Z      Compiling endi v1.1.1
+2026-02-25T15:02:22.0879674Z      Compiling openssl v0.10.75
+2026-02-25T15:02:22.1594151Z      Compiling getrandom v0.3.4
+2026-02-25T15:02:22.2120739Z      Compiling foreign-types-shared v0.1.1
+2026-02-25T15:02:22.2474453Z      Compiling foreign-types v0.3.2
+2026-02-25T15:02:22.5114212Z   error: failed to run custom build command for `libdbus-sys v0.2.7`
+2026-02-25T15:02:22.5128529Z
+2026-02-25T15:02:22.5128705Z   Caused by:
+2026-02-25T15:02:22.5130149Z   process didn't exit successfully: `/home/runner/work/yadisk-gtk/yadisk-gtk/target/debug/build/libdbus-sys-c410914107d62763/build-script-build` (exit status: 101)
+2026-02-25T15:02:22.5131343Z   --- stdout
+2026-02-25T15:02:22.5131646Z   cargo:rerun-if-changed=build.rs
+2026-02-25T15:02:22.5132069Z   cargo:rerun-if-changed=build_vendored.rs
+2026-02-25T15:02:22.5132556Z   cargo:rerun-if-env-changed=DBUS_1_NO_PKG_CONFIG
+2026-02-25T15:02:22.5133168Z   cargo:rerun-if-env-changed=PKG_CONFIG_x86_64-unknown-linux-gnu
+2026-02-25T15:02:22.5133896Z   cargo:rerun-if-env-changed=PKG_CONFIG_x86_64_unknown_linux_gnu
+2026-02-25T15:02:22.5134486Z   cargo:rerun-if-env-changed=HOST_PKG_CONFIG
+2026-02-25T15:02:22.5134982Z   cargo:rerun-if-env-changed=PKG_CONFIG
+2026-02-25T15:02:22.5135458Z   cargo:rerun-if-env-changed=DBUS_1_STATIC
+2026-02-25T15:02:22.5135952Z   cargo:rerun-if-env-changed=DBUS_1_DYNAMIC
+2026-02-25T15:02:22.5136481Z   cargo:rerun-if-env-changed=PKG_CONFIG_ALL_STATIC
+2026-02-25T15:02:22.5137050Z   cargo:rerun-if-env-changed=PKG_CONFIG_ALL_DYNAMIC
+2026-02-25T15:02:22.5137712Z   cargo:rerun-if-env-changed=PKG_CONFIG_PATH_x86_64-unknown-linux-gnu
+2026-02-25T15:02:22.5138448Z   cargo:rerun-if-env-changed=PKG_CONFIG_PATH_x86_64_unknown_linux_gnu
+2026-02-25T15:02:22.5153654Z   cargo:rerun-if-env-changed=HOST_PKG_CONFIG_PATH
+2026-02-25T15:02:22.5154340Z   cargo:rerun-if-env-changed=PKG_CONFIG_PATH
+2026-02-25T15:02:22.5154953Z   cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR_x86_64-unknown-linux-gnu
+2026-02-25T15:02:22.5156131Z   cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR_x86_64_unknown_linux_gnu
+2026-02-25T15:02:22.5156815Z   cargo:rerun-if-env-changed=HOST_PKG_CONFIG_LIBDIR
+2026-02-25T15:02:22.5157343Z   cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR
+2026-02-25T15:02:22.5157961Z   cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64-unknown-linux-gnu
+2026-02-25T15:02:22.5158739Z   cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR_x86_64_unknown_linux_gnu
+2026-02-25T15:02:22.5167933Z   cargo:rerun-if-env-changed=HOST_PKG_CONFIG_SYSROOT_DIR
+2026-02-25T15:02:22.5168564Z   cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR
+2026-02-25T15:02:22.5169192Z
+2026-02-25T15:02:22.5169321Z   --- stderr
+2026-02-25T15:02:22.5169633Z   pkg_config failed: 
+2026-02-25T15:02:22.5169963Z   pkg-config exited with status code 1
+2026-02-25T15:02:22.5170854Z   > PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 pkg-config --libs --cflags dbus-1 'dbus-1 >= 1.6'
+2026-02-25T15:02:22.5171657Z
+2026-02-25T15:02:22.5172011Z   The system library `dbus-1` required by crate `libdbus-sys` was not found.
+2026-02-25T15:02:22.5173450Z   The file `dbus-1.pc` needs to be installed and the PKG_CONFIG_PATH environment variable must contain its parent directory.
+2026-02-25T15:02:22.5174506Z   The PKG_CONFIG_PATH environment variable is not set.
+2026-02-25T15:02:22.5174895Z
+2026-02-25T15:02:22.5175425Z   HINT: if you have installed the library, try setting PKG_CONFIG_PATH to the directory containing `dbus-1.pc`.
+2026-02-25T15:02:22.5176156Z
+2026-02-25T15:02:22.5176372Z   One possible solution is to check whether packages
+2026-02-25T15:02:22.5176904Z   'libdbus-1-dev' and 'pkg-config' are installed:
+2026-02-25T15:02:22.5177333Z   On Ubuntu:
+2026-02-25T15:02:22.5177658Z   sudo apt install libdbus-1-dev pkg-config
+2026-02-25T15:02:22.5178085Z   On Fedora:
+2026-02-25T15:02:22.5178438Z   sudo dnf install dbus-devel pkgconf-pkg-config
+2026-02-25T15:02:22.5178782Z
+2026-02-25T15:02:22.5178787Z
+2026-02-25T15:02:22.5179655Z   thread 'main' (4588) panicked at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libdbus-sys-0.2.7/build.rs:25:9:
+2026-02-25T15:02:22.5180592Z   explicit panic
+2026-02-25T15:02:22.5181092Z   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-02-25T15:02:22.5182132Z   warning: build failed, waiting for other jobs to finish...
+2026-02-25T15:02:27.3128752Z   ⛔ Process completed with exit code 101.
+2026-02-25T15:02:27.3233563Z   Post job cleanup.
+2026-02-25T15:02:27.4177846Z   ▶ [command] /usr/bin/git version
+2026-02-25T15:02:27.4214168Z   git version 2.52.0
+2026-02-25T15:02:27.4256225Z   Temporarily overriding HOME='/home/runner/work/_temp/976ff8ee-1595-432b-b575-8fafce061b3e' before making global git config changes
+2026-02-25T15:02:27.4257281Z   Adding repository directory to the temporary git global config as a safe directory
+2026-02-25T15:02:27.4268336Z   ▶ [command] /usr/bin/git config --global --add safe.directory /home/runner/work/yadisk-gtk/yadisk-gtk
+2026-02-25T15:02:27.4301490Z   ▶ [command] /usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-25T15:02:27.4333367Z   ▶ [command] /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-25T15:02:27.4556244Z   ▶ [command] /usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-25T15:02:27.4576118Z   http.https://github.com/.extraheader
+2026-02-25T15:02:27.4588473Z   ▶ [command] /usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-02-25T15:02:27.4619823Z   ▶ [command] /usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-25T15:02:27.4841331Z   ▶ [command] /usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-25T15:02:27.4873824Z   ▶ [command] /usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-25T15:02:27.5212245Z   Cleaning up orphan processes

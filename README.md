@@ -67,6 +67,45 @@ YADISK_TOKEN=<your_token> cargo run -p yadiskd
 export YADISK_CLIENT_ID=<client_id>
 export YADISK_CLIENT_SECRET=<client_secret>
 cargo run -p yadiskd
+# By default yadiskd opens system browser via portal and captures code automatically.
+# In graphical GNOME session with `zenity` installed it also shows native auth dialogs.
+# Fallback (headless/manual): export YADISK_OAUTH_FORCE_MANUAL=1
+# Optional timeout for browser callback: export YADISK_OAUTH_TIMEOUT_SECS=180
+
+# Logout (remove saved OAuth token and force new auth on next start)
+cargo run -p yadiskd -- --logout
+```
+
+### `yadisk-ui` orchestration CLI (MVP)
+
+```bash
+# auth + daemon control
+cargo run -p yadisk-ui -- --start-auth
+cargo run -p yadisk-ui -- --start-daemon
+cargo run -p yadisk-ui -- --restart-daemon
+cargo run -p yadisk-ui -- --enable-autostart
+
+# integrations
+cargo run -p yadisk-ui -- --check-integrations
+cargo run -p yadisk-ui -- --install-integrations-guided
+
+# diagnostics/settings snapshots (JSON)
+cargo run -p yadisk-ui -- --show-settings
+cargo run -p yadisk-ui -- --diagnostics
+
+# GTK/libadwaita shell (MVP)
+cargo run -p yadisk-ui        # default: launches GTK window
+cargo run -p yadisk-ui -- --gtk
+
+# force CLI status mode
+cargo run -p yadisk-ui -- --status
+
+# open specific tab directly
+cargo run -p yadisk-ui -- --tab-welcome
+cargo run -p yadisk-ui -- --tab-sync
+cargo run -p yadisk-ui -- --tab-integrations
+cargo run -p yadisk-ui -- --tab-settings
+cargo run -p yadisk-ui -- --tab-diagnostics
 ```
 
 ### GNOME status tray icon (indicator)

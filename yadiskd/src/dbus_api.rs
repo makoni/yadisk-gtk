@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -10,6 +11,8 @@ use yadisk_integrations::ids::{
 };
 use zbus::{interface, object_server::SignalEmitter};
 
+use crate::oauth_flow::{OAuthFlow, OAuthFlowError};
+use crate::storage::{OAuthState, TokenStorage};
 use crate::sync::engine::EngineError;
 use crate::sync::engine::PathDisplayState;
 use crate::sync::engine::SyncEngine;
@@ -135,6 +138,106 @@ fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
         EngineError::MissingItem(_) => map_to_fdo(DbusServiceError::NotFound),
         _ => map_to_fdo(DbusServiceError::Failed),
     }
+}
+
+#[derive(Default)]
+pub struct ControlDbusService {
+    backend: Option<Arc<SyncEngine>>,
+    auth_override: RwLock<Option<(String, String)>>,
+    integration_override: RwLock<Option<(String, String)>>,
+}
+
+impl ControlDbusService {
+    pub fn with_engine(engine: Arc<SyncEngine>) -> Self {
+        Self {
+            backend: Some(engine),
+            auth_override: RwLock::new(None),
+            integration_override: RwLock::new(None),
+        }
+    }
+
+    async fn daemon_status_tuple(&self) -> (String, String) {
+        let has_work = if let Some(engine) = &self.backend {
+            engine.has_active_or_queued_work().await.unwrap_or(false)
+        } else {
+            false
+        };
+        if has_work {
+            (
+                "busy".to_string(),
+                "queued or active operations".to_string(),
+            )
+        } else {
+            ("running".to_string(), "idle".to_string())
+        }
+    }
+
+    async fn set_auth_override(&self, state: &str, message: &str) {
+        let mut auth_override = self.auth_override.write().await;
+        *auth_override = Some((state.to_string(), message.to_string()));
+    }
+
+    fn oauth_flow_from_env() -> Result<OAuthFlow, zbus::fdo::Error> {
+        let client_id = std::env::var("YADISK_CLIENT_ID")
+            .map_err(|_| zbus::fdo::Error::Failed("YADISK_CLIENT_ID is missing".to_string()))?;
+        let client_secret = std::env::var("YADISK_CLIENT_SECRET")
+            .map_err(|_| zbus::fdo::Error::Failed("YADISK_CLIENT_SECRET is missing".to_string()))?;
+        Ok(OAuthFlow::new(client_id, client_secret))
+    }
+
+    fn detect_integration_status() -> (String, String) {
+        let nautilus_installed = nautilus_candidate_paths()
+            .into_iter()
+            .map(|base| base.join("libyadisk_nautilus.so"))
+            .any(|path| path.is_file());
+        let fuse_installed = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".local/bin/yadisk-fuse"))
+            .is_some_and(|path| path.is_file());
+        let emblems_installed = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| {
+                home.join(".local/share/icons/hicolor/scalable/emblems")
+                    .join("cloud-outline-thin-symbolic.svg")
+            })
+            .is_some_and(|path| path.is_file());
+        let state = if nautilus_installed && fuse_installed && emblems_installed {
+            "ok".to_string()
+        } else {
+            "needs_setup".to_string()
+        };
+        let mut missing = Vec::new();
+        if !nautilus_installed {
+            missing.push("nautilus_extension");
+        }
+        if !fuse_installed {
+            missing.push("fuse_helper");
+        }
+        if !emblems_installed {
+            missing.push("emblems");
+        }
+        let message = if missing.is_empty() {
+            "all integration components are present".to_string()
+        } else {
+            format!("missing components: {}", missing.join(", "))
+        };
+        (state, message)
+    }
+}
+
+fn nautilus_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        paths.push(home.join(".local/lib/nautilus/extensions-4"));
+    }
+    paths.push(PathBuf::from("/usr/lib/nautilus/extensions-4"));
+    paths.push(PathBuf::from(
+        "/usr/lib/x86_64-linux-gnu/nautilus/extensions-4",
+    ));
+    paths
 }
 
 #[interface(name = "me.spaceinbox.yadisk.Sync1")]
@@ -275,6 +378,111 @@ impl SyncDbusService {
     ) -> zbus::Result<()>;
 }
 
+#[interface(name = "me.spaceinbox.yadisk.Control1")]
+impl ControlDbusService {
+    async fn get_daemon_status(&self) -> zbus::fdo::Result<(String, String)> {
+        Ok(self.daemon_status_tuple().await)
+    }
+
+    async fn get_auth_state(&self) -> zbus::fdo::Result<(String, String)> {
+        if let Some(override_state) = self.auth_override.read().await.as_ref() {
+            return Ok(override_state.clone());
+        }
+        let storage = TokenStorage::new()
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(format!("token storage error: {err}")))?;
+        if storage.has_token() {
+            Ok(("authorized".to_string(), "saved token found".to_string()))
+        } else {
+            Ok(("unauthorized".to_string(), "token is missing".to_string()))
+        }
+    }
+
+    async fn get_integration_status(&self) -> zbus::fdo::Result<(String, String)> {
+        if let Some(override_state) = self.integration_override.read().await.as_ref() {
+            return Ok(override_state.clone());
+        }
+        Ok(Self::detect_integration_status())
+    }
+
+    async fn start_auth(&self) -> zbus::fdo::Result<()> {
+        self.set_auth_override("pending", "auth flow start requested")
+            .await;
+        let flow = Self::oauth_flow_from_env()?;
+        let token = match flow.authenticate().await {
+            Ok(token) => token,
+            Err(OAuthFlowError::Cancelled) => {
+                self.set_auth_override("unauthorized", "authorization cancelled")
+                    .await;
+                return Ok(());
+            }
+            Err(err) => {
+                self.set_auth_override("error", &err.to_string()).await;
+                return Err(zbus::fdo::Error::Failed(format!(
+                    "authorization failed: {err}"
+                )));
+            }
+        };
+
+        let storage = TokenStorage::new()
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(format!("token storage error: {err}")))?;
+        storage
+            .save_oauth_state(&OAuthState::from_oauth_token(&token))
+            .map_err(|err| zbus::fdo::Error::Failed(format!("failed to save token: {err}")))?;
+        self.set_auth_override("authorized", "token saved").await;
+        Ok(())
+    }
+
+    async fn cancel_auth(&self) -> zbus::fdo::Result<()> {
+        self.set_auth_override("cancelled", "auth request cancelled")
+            .await;
+        Ok(())
+    }
+
+    async fn logout(&self) -> zbus::fdo::Result<()> {
+        let storage = TokenStorage::new()
+            .await
+            .map_err(|err| zbus::fdo::Error::Failed(format!("token storage error: {err}")))?;
+        storage
+            .delete_token()
+            .map_err(|err| zbus::fdo::Error::Failed(format!("logout failed: {err}")))?;
+        self.set_auth_override("unauthorized", "token removed")
+            .await;
+        Ok(())
+    }
+
+    async fn run_integration_check(&self) -> zbus::fdo::Result<(String, String)> {
+        let status = Self::detect_integration_status();
+        {
+            let mut integration_override = self.integration_override.write().await;
+            *integration_override = Some(status.clone());
+        }
+        Ok(status)
+    }
+
+    #[zbus(signal)]
+    pub async fn daemon_status_changed(
+        ctxt: &SignalEmitter<'_>,
+        state: &str,
+        message: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn auth_state_changed(
+        ctxt: &SignalEmitter<'_>,
+        state: &str,
+        message: &str,
+    ) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    pub async fn integration_status_changed(
+        ctxt: &SignalEmitter<'_>,
+        state: &str,
+        details: &str,
+    ) -> zbus::Result<()>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +545,21 @@ mod tests {
             .insert("/Docs".to_string(), PathState::Partial);
         let state = service.get_state("/Docs").await.unwrap();
         assert_eq!(state, "partial");
+    }
+
+    #[tokio::test]
+    async fn control_service_defaults_to_running_idle() {
+        let service = ControlDbusService::default();
+        let (state, message) = service.get_daemon_status().await.unwrap();
+        assert_eq!(state, "running");
+        assert_eq!(message, "idle");
+    }
+
+    #[tokio::test]
+    async fn control_service_supports_integration_check_override() {
+        let service = ControlDbusService::default();
+        let (state, message) = service.run_integration_check().await.unwrap();
+        assert!(matches!(state.as_str(), "ok" | "needs_setup"));
+        assert!(!message.is_empty());
     }
 }
