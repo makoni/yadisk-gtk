@@ -46,10 +46,16 @@ impl ControlClient {
         })
     }
 
-    pub fn start_auth(&self) -> Result<()> {
+    pub fn start_auth(&self) -> Result<String> {
         self.proxy()?
-            .call::<_, _, ()>("StartAuth", &())
+            .call("StartAuth", &())
             .context("StartAuth failed")
+    }
+
+    pub fn submit_auth_code(&self, code: &str) -> Result<()> {
+        self.proxy()?
+            .call::<_, _, ()>("SubmitAuthCode", &(code,))
+            .context("SubmitAuthCode failed")
     }
 
     pub fn cancel_auth(&self) -> Result<()> {

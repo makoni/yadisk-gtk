@@ -4,6 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${repo_root}"
 
+run_privileged() {
+  if command -v pkexec >/dev/null 2>&1 && ([[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]); then
+    pkexec "$@"
+    return $?
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return $?
+  fi
+  return 127
+}
+
 target_so="target/release/libyadisk_nautilus.so"
 icon_src_dir="${repo_root}/packaging/icons/hicolor/scalable/emblems"
 icon_dst_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/emblems"
@@ -28,15 +40,15 @@ if [[ ! -d "${ext_dir}" ]]; then
 fi
 
 if [[ ! -w "${ext_dir}" ]]; then
-  if command -v sudo >/dev/null 2>&1; then
+  if command -v pkexec >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
     echo "[install] extension dir requires root permissions: ${ext_dir}"
-    sudo install -D -m 0755 "${repo_root}/${target_so}" "${ext_dir}/libyadisk_nautilus.so"
-    echo "[install] installed with sudo: ${ext_dir}/libyadisk_nautilus.so"
+    run_privileged install -D -m 0755 "${repo_root}/${target_so}" "${ext_dir}/libyadisk_nautilus.so"
+    echo "[install] installed with elevated privileges: ${ext_dir}/libyadisk_nautilus.so"
     echo "[install] dependency note: install libnautilus-extension(-dev) for GNOME Files 49"
     echo "[install] restart Nautilus: nautilus -q"
     exit 0
   fi
-  echo "[install] extension dir is not writable and sudo is unavailable: ${ext_dir}" >&2
+  echo "[install] extension dir is not writable and neither pkexec nor sudo is available: ${ext_dir}" >&2
   exit 1
 fi
 

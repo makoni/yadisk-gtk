@@ -35,6 +35,11 @@ struct Widgets {
     integration_label: gtk4::Label,
     settings_label: gtk4::Label,
     diagnostics_label: gtk4::Label,
+    auth_start_button: gtk4::Button,
+    auth_cancel_button: gtk4::Button,
+    auth_logout_button: gtk4::Button,
+    autostart_enable_button: gtk4::Button,
+    autostart_disable_button: gtk4::Button,
 }
 
 pub fn run(start_tab: Option<String>) -> Result<()> {
@@ -114,7 +119,7 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
             .content(&content)
             .build();
 
-        wire_actions(&stack, Rc::clone(&widgets));
+        wire_actions(&stack, Rc::clone(&widgets), &window);
         window.present();
     });
 
@@ -156,7 +161,7 @@ fn build_pages(
     welcome_content.append(&auth_card);
     welcome_content.append(&note_card(
         "Next step",
-        "Start Auth, confirm access in the browser, then return here. The page refreshes automatically every few seconds.",
+        "Start Auth, confirm access in the browser, then paste the code. After success the app automatically starts daemon, enables autostart, and checks integration readiness.",
     ));
     stack.add_titled(&welcome, Some("welcome"), "Welcome");
 
@@ -284,6 +289,11 @@ fn build_pages(
         integration_label,
         settings_label,
         diagnostics_label,
+        auth_start_button: btn_auth_start,
+        auth_cancel_button: btn_auth_cancel,
+        auth_logout_button: btn_logout,
+        autostart_enable_button: btn_auto_on,
+        autostart_disable_button: btn_auto_off,
     }
 }
 
@@ -427,12 +437,27 @@ fn status_badge() -> gtk4::Label {
     label
 }
 
-fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>) {
+fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::ApplicationWindow) {
     if let Some(button) = find_button(stack, ACTION_AUTH_START) {
         let widgets = Rc::clone(&widgets);
+        let window = window.clone();
+        let stack = stack.clone();
         button.connect_clicked(move |_| {
-            if let Ok(client) = ControlClient::connect() {
-                let _ = client.start_auth();
+            match start_auth_with_daemon_bootstrap() {
+                Ok(url) => {
+                    open_browser_url(&url);
+                    prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
+                }
+                Err(err) => {
+                    show_text_dialog(
+                        &window,
+                        "Start Auth failed",
+                        &format!(
+                            "Could not start authorization.\n\n{}\n\nCheck YADISK_CLIENT_ID/YADISK_CLIENT_SECRET and daemon status.",
+                            err
+                        ),
+                    );
+                }
             }
             refresh_ui(&widgets);
         });
@@ -540,6 +565,221 @@ fn find_button(root: &gtk4::Stack, widget_name: &str) -> Option<gtk4::Button> {
     search(root.as_ref(), widget_name)
 }
 
+fn start_auth_with_daemon_bootstrap() -> Result<String> {
+    let first_error = match start_auth_once() {
+        Ok(url) => return Ok(url),
+        Err(err) => err,
+    };
+    let _ = run_service_action(ServiceAction::Restart);
+    match start_auth_once() {
+        Ok(url) => Ok(url),
+        Err(retry_error) => Err(anyhow::anyhow!(
+            "initial attempt failed: {first_error}; retry after daemon restart failed: {retry_error}"
+        )),
+    }
+}
+
+fn start_auth_once() -> Result<String> {
+    if let Ok(client) = ControlClient::connect() {
+        return client.start_auth();
+    }
+    run_service_action(ServiceAction::Start)?;
+    let client = ControlClient::connect()?;
+    client.start_auth()
+}
+
+fn submit_auth_code_with_daemon_bootstrap(code: &str) -> Result<()> {
+    if let Ok(client) = ControlClient::connect() {
+        return client.submit_auth_code(code);
+    }
+    run_service_action(ServiceAction::Start)?;
+    let client = ControlClient::connect()?;
+    client.submit_auth_code(code)
+}
+
+fn open_browser_url(url: &str) {
+    if gio::AppInfo::launch_default_for_uri(url, None::<&gio::AppLaunchContext>).is_err() {
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    }
+}
+
+fn prompt_auth_code_dialog(
+    window: &libadwaita::ApplicationWindow,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+    auth_url: String,
+) {
+    let dialog = gtk4::Dialog::builder()
+        .title("Finish authorization")
+        .modal(true)
+        .transient_for(window)
+        .build();
+    dialog.add_button("Open browser again", gtk4::ResponseType::Other(1));
+    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
+    dialog.add_button("Submit code", gtk4::ResponseType::Accept);
+    dialog.set_default_response(gtk4::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    let body = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    let message = gtk4::Label::new(Some(
+        "Authorize access in your browser, then paste the verification code here.",
+    ));
+    message.set_wrap(true);
+    message.set_halign(gtk4::Align::Start);
+    message.set_xalign(0.0);
+    let url_label = gtk4::Label::new(Some(&auth_url));
+    url_label.set_wrap(true);
+    url_label.set_selectable(true);
+    url_label.set_halign(gtk4::Align::Start);
+    url_label.set_xalign(0.0);
+    let entry = gtk4::Entry::new();
+    entry.set_placeholder_text(Some("Paste verification code"));
+    entry.set_activates_default(true);
+    body.append(&message);
+    body.append(&url_label);
+    body.append(&entry);
+    content.append(&body);
+
+    let entry_for_response = entry.clone();
+    let auth_url_for_response = auth_url.clone();
+    let stack_for_response = stack.clone();
+    let window_for_response = window.clone();
+    dialog.connect_response(move |dialog, response| match response {
+        gtk4::ResponseType::Accept => {
+            let code = entry_for_response.text().trim().to_string();
+            if !code.is_empty() {
+                match submit_auth_code_with_daemon_bootstrap(&code) {
+                    Ok(()) => {
+                        let post_auth = run_post_auth_steps();
+                        if post_auth.integration_needs_setup {
+                            stack_for_response.set_visible_child_name("integrations");
+                        } else {
+                            stack_for_response.set_visible_child_name("sync");
+                        }
+                        show_text_dialog(
+                            &window_for_response,
+                            "Authorization completed",
+                            &post_auth_summary_text(&post_auth),
+                        );
+                    }
+                    Err(err) => {
+                        show_text_dialog(
+                            &window_for_response,
+                            "Authorization failed",
+                            &format!("Failed to submit verification code:\n{err}"),
+                        );
+                    }
+                }
+            }
+            dialog.close();
+            refresh_ui(&widgets);
+        }
+        gtk4::ResponseType::Other(1) => {
+            open_browser_url(&auth_url_for_response);
+        }
+        _ => {
+            dialog.close();
+            refresh_ui(&widgets);
+        }
+    });
+    dialog.present();
+}
+
+#[derive(Debug, Clone)]
+struct PostAuthStep {
+    ok: bool,
+    detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct PostAuthSummary {
+    daemon_start: PostAuthStep,
+    autostart_enable: PostAuthStep,
+    integrations: PostAuthStep,
+    integration_needs_setup: bool,
+}
+
+fn run_post_auth_steps() -> PostAuthSummary {
+    let daemon_start = match run_service_action(ServiceAction::Start) {
+        Ok(()) => PostAuthStep {
+            ok: true,
+            detail: "daemon is running".to_string(),
+        },
+        Err(err) => PostAuthStep {
+            ok: false,
+            detail: format!("failed to start daemon: {err}"),
+        },
+    };
+    let autostart_enable = match run_service_action(ServiceAction::EnableAutostart) {
+        Ok(()) => PostAuthStep {
+            ok: true,
+            detail: "autostart enabled".to_string(),
+        },
+        Err(err) => PostAuthStep {
+            ok: false,
+            detail: format!("failed to enable autostart: {err}"),
+        },
+    };
+    let model = UiModel::collect();
+    let integration_needs_setup =
+        !matches!(model.integration_status, crate::ui_model::UiStatus::Ready);
+    let integrations = if integration_needs_setup {
+        PostAuthStep {
+            ok: false,
+            detail: format!("setup required: {}", model.integration_summary),
+        }
+    } else {
+        PostAuthStep {
+            ok: true,
+            detail: model.integration_summary,
+        }
+    };
+    PostAuthSummary {
+        daemon_start,
+        autostart_enable,
+        integrations,
+        integration_needs_setup,
+    }
+}
+
+fn post_auth_summary_text(summary: &PostAuthSummary) -> String {
+    let format_step = |step: &PostAuthStep| {
+        if step.ok {
+            format!("ok ({})", step.detail)
+        } else {
+            format!("needs attention ({})", step.detail)
+        }
+    };
+    format!(
+        "Next steps after authorization:\n- Daemon: {}\n- Autostart: {}\n- Files integration: {}\n{}",
+        format_step(&summary.daemon_start),
+        format_step(&summary.autostart_enable),
+        format_step(&summary.integrations),
+        if summary.integration_needs_setup {
+            "Open the Integrations tab and run Guided Install."
+        } else {
+            "Everything is ready. You can start syncing now."
+        }
+    )
+}
+
+fn show_text_dialog(window: &libadwaita::ApplicationWindow, title: &str, text: &str) {
+    let dialog = gtk4::Dialog::builder()
+        .title(title)
+        .modal(true)
+        .transient_for(window)
+        .build();
+    dialog.add_button("OK", gtk4::ResponseType::Close);
+    let label = gtk4::Label::new(Some(text));
+    label.set_wrap(true);
+    label.set_selectable(true);
+    label.set_halign(gtk4::Align::Start);
+    label.set_xalign(0.0);
+    dialog.content_area().append(&label);
+    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.present();
+}
+
 fn refresh_ui(widgets: &Widgets) {
     let model = UiModel::collect();
     update_badge(&widgets.overview_auth_badge, model.auth_status);
@@ -570,6 +810,96 @@ fn refresh_ui(widgets: &Widgets) {
         "Daemon status: {:?}\nAuth status: {:?}\nIntegrations status: {:?}",
         model.daemon_status, model.auth_status, model.integration_status
     ));
+    apply_action_visibility(widgets, &model);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthActionState {
+    Unauthorized,
+    Authorizing,
+    Authorized,
+    Error,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutostartActionState {
+    Enabled,
+    Disabled,
+    Unknown,
+}
+
+fn auth_action_state(model: &UiModel) -> AuthActionState {
+    if let Some(control) = &model.control {
+        return match control.auth_state.as_str() {
+            "authorized" => AuthActionState::Authorized,
+            "pending" => AuthActionState::Authorizing,
+            "unauthorized" | "cancelled" => AuthActionState::Unauthorized,
+            "error" => AuthActionState::Error,
+            _ => AuthActionState::Unknown,
+        };
+    }
+    match model.auth_status {
+        crate::ui_model::UiStatus::Ready => AuthActionState::Authorized,
+        crate::ui_model::UiStatus::NeedsSetup => AuthActionState::Unauthorized,
+        crate::ui_model::UiStatus::Error => AuthActionState::Error,
+        crate::ui_model::UiStatus::Unknown => AuthActionState::Unknown,
+    }
+}
+
+fn autostart_action_state(autostart: &str) -> AutostartActionState {
+    match autostart {
+        "enabled" | "enabled-runtime" | "linked" | "linked-runtime" => {
+            AutostartActionState::Enabled
+        }
+        "disabled" | "masked" => AutostartActionState::Disabled,
+        _ => AutostartActionState::Unknown,
+    }
+}
+
+fn apply_action_visibility(widgets: &Widgets, model: &UiModel) {
+    match auth_action_state(model) {
+        AuthActionState::Unauthorized => {
+            widgets.auth_start_button.set_visible(true);
+            widgets.auth_cancel_button.set_visible(false);
+            widgets.auth_logout_button.set_visible(false);
+        }
+        AuthActionState::Authorizing => {
+            widgets.auth_start_button.set_visible(false);
+            widgets.auth_cancel_button.set_visible(true);
+            widgets.auth_logout_button.set_visible(false);
+        }
+        AuthActionState::Authorized => {
+            widgets.auth_start_button.set_visible(false);
+            widgets.auth_cancel_button.set_visible(false);
+            widgets.auth_logout_button.set_visible(true);
+        }
+        AuthActionState::Error => {
+            widgets.auth_start_button.set_visible(true);
+            widgets.auth_cancel_button.set_visible(false);
+            widgets.auth_logout_button.set_visible(false);
+        }
+        AuthActionState::Unknown => {
+            widgets.auth_start_button.set_visible(true);
+            widgets.auth_cancel_button.set_visible(true);
+            widgets.auth_logout_button.set_visible(true);
+        }
+    }
+
+    match autostart_action_state(model.settings.autostart.as_str()) {
+        AutostartActionState::Enabled => {
+            widgets.autostart_enable_button.set_visible(false);
+            widgets.autostart_disable_button.set_visible(true);
+        }
+        AutostartActionState::Disabled => {
+            widgets.autostart_enable_button.set_visible(true);
+            widgets.autostart_disable_button.set_visible(false);
+        }
+        AutostartActionState::Unknown => {
+            widgets.autostart_enable_button.set_visible(true);
+            widgets.autostart_disable_button.set_visible(true);
+        }
+    }
 }
 
 fn update_badge(label: &gtk4::Label, status: crate::ui_model::UiStatus) {

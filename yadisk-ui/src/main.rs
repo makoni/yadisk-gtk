@@ -8,6 +8,8 @@ mod settings;
 mod state;
 mod ui_model;
 
+use std::io::Write;
+
 use control_client::ControlClient;
 use diagnostics::print_diagnostics_report;
 use integration_control::{
@@ -15,7 +17,7 @@ use integration_control::{
 };
 use service_control::{ServiceAction, run_service_action};
 use settings::read_settings_snapshot;
-use ui_model::UiModel;
+use ui_model::{UiModel, UiStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CliMode {
@@ -131,10 +133,7 @@ fn main() -> anyhow::Result<()> {
 
     let client = ControlClient::connect().ok();
     match mode {
-        CliMode::StartAuth => client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("yadiskd D-Bus service is not available"))?
-            .start_auth()?,
+        CliMode::StartAuth => start_auth_via_control(client.as_ref())?,
         CliMode::CancelAuth => client
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("yadiskd D-Bus service is not available"))?
@@ -187,6 +186,72 @@ fn main() -> anyhow::Result<()> {
         state::run(&model);
     }
     Ok(())
+}
+
+fn start_auth_via_control(client: Option<&ControlClient>) -> anyhow::Result<()> {
+    let url = start_auth_request(client)?;
+    println!("Open this URL in your browser:\n{url}");
+    print!("Enter the verification code: ");
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    submit_auth_code_request(input.trim())?;
+    run_post_auth_steps_cli();
+    Ok(())
+}
+
+fn start_auth_request(client: Option<&ControlClient>) -> anyhow::Result<String> {
+    if let Some(client) = client
+        && let Ok(url) = client.start_auth()
+    {
+        return Ok(url);
+    }
+    if client.is_none() {
+        run_service_action(ServiceAction::Start)?;
+    }
+    let connected = ControlClient::connect()
+        .map_err(|err| anyhow::anyhow!("yadiskd D-Bus service is not available: {err}"))?;
+    match connected.start_auth() {
+        Ok(url) => Ok(url),
+        Err(first_err) => {
+            run_service_action(ServiceAction::Restart)?;
+            let retry_client = ControlClient::connect().map_err(|err| {
+                anyhow::anyhow!("yadiskd D-Bus service is not available after restart: {err}")
+            })?;
+            retry_client.start_auth().map_err(|retry_err| {
+                anyhow::anyhow!(
+                    "StartAuth failed: {first_err}; retry after daemon restart failed: {retry_err}"
+                )
+            })
+        }
+    }
+}
+
+fn submit_auth_code_request(code: &str) -> anyhow::Result<()> {
+    if let Ok(client) = ControlClient::connect() {
+        return client.submit_auth_code(code);
+    }
+    run_service_action(ServiceAction::Start)?;
+    let client = ControlClient::connect()
+        .map_err(|err| anyhow::anyhow!("yadiskd D-Bus service is not available: {err}"))?;
+    client.submit_auth_code(code)
+}
+
+fn run_post_auth_steps_cli() {
+    println!("Post-auth setup:");
+    match run_service_action(ServiceAction::Start) {
+        Ok(()) => println!("- Daemon: running"),
+        Err(err) => eprintln!("- Daemon: failed to start ({err})"),
+    }
+    match run_service_action(ServiceAction::EnableAutostart) {
+        Ok(()) => println!("- Autostart: enabled"),
+        Err(err) => eprintln!("- Autostart: failed to enable ({err})"),
+    }
+    let model = UiModel::collect();
+    println!("- Files integration: {}", model.integration_summary);
+    if !matches!(model.integration_status, UiStatus::Ready) {
+        println!("- Next: run `yadisk-ui --install-integrations-guided`");
+    }
 }
 
 fn print_help() {

@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use thiserror::Error;
 use tokio::sync::RwLock;
+use url::Url;
+use yadisk_core::OAuthClient;
 use yadisk_integrations::ids::{
     DBUS_ERROR_BUSY, DBUS_ERROR_FAILED, DBUS_ERROR_INVALID_PATH, DBUS_ERROR_NOT_FOUND,
 };
 use zbus::{interface, object_server::SignalEmitter};
 
-use crate::oauth_flow::{OAuthFlow, OAuthFlowError};
 use crate::storage::{OAuthState, TokenStorage};
 use crate::sync::engine::EngineError;
 use crate::sync::engine::PathDisplayState;
@@ -144,7 +145,14 @@ fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
 pub struct ControlDbusService {
     backend: Option<Arc<SyncEngine>>,
     auth_override: RwLock<Option<(String, String)>>,
+    auth_session: RwLock<Option<AuthSession>>,
     integration_override: RwLock<Option<(String, String)>>,
+}
+
+#[derive(Clone)]
+struct AuthSession {
+    oauth_client: OAuthClient,
+    authorize_url: String,
 }
 
 impl ControlDbusService {
@@ -152,6 +160,7 @@ impl ControlDbusService {
         Self {
             backend: Some(engine),
             auth_override: RwLock::new(None),
+            auth_session: RwLock::new(None),
             integration_override: RwLock::new(None),
         }
     }
@@ -177,12 +186,43 @@ impl ControlDbusService {
         *auth_override = Some((state.to_string(), message.to_string()));
     }
 
-    fn oauth_flow_from_env() -> Result<OAuthFlow, zbus::fdo::Error> {
+    fn oauth_client_from_env() -> Result<(OAuthClient, String), zbus::fdo::Error> {
         let client_id = std::env::var("YADISK_CLIENT_ID")
             .map_err(|_| zbus::fdo::Error::Failed("YADISK_CLIENT_ID is missing".to_string()))?;
         let client_secret = std::env::var("YADISK_CLIENT_SECRET")
             .map_err(|_| zbus::fdo::Error::Failed("YADISK_CLIENT_SECRET is missing".to_string()))?;
-        Ok(OAuthFlow::new(client_id, client_secret))
+        let oauth_client = OAuthClient::new(client_id.clone(), client_secret)
+            .map_err(|err| zbus::fdo::Error::Failed(format!("oauth client init failed: {err}")))?;
+        Ok((oauth_client, client_id))
+    }
+
+    fn manual_authorize_url(client_id: &str) -> Result<String, zbus::fdo::Error> {
+        let mut url = Url::parse("https://oauth.yandex.ru/authorize")
+            .map_err(|err| zbus::fdo::Error::Failed(format!("oauth URL build failed: {err}")))?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("response_type", "code");
+            query.append_pair("client_id", client_id);
+        }
+        Ok(url.to_string())
+    }
+
+    async fn start_auth_session(
+        &self,
+        oauth_client: OAuthClient,
+        client_id: &str,
+    ) -> zbus::fdo::Result<String> {
+        let authorize_url = Self::manual_authorize_url(client_id)?;
+        {
+            let mut auth_session = self.auth_session.write().await;
+            *auth_session = Some(AuthSession {
+                oauth_client,
+                authorize_url: authorize_url.clone(),
+            });
+        }
+        self.set_auth_override("pending", "waiting for verification code")
+            .await;
+        Ok(authorize_url)
     }
 
     fn detect_integration_status() -> (String, String) {
@@ -405,17 +445,25 @@ impl ControlDbusService {
         Ok(Self::detect_integration_status())
     }
 
-    async fn start_auth(&self) -> zbus::fdo::Result<()> {
-        self.set_auth_override("pending", "auth flow start requested")
-            .await;
-        let flow = Self::oauth_flow_from_env()?;
-        let token = match flow.authenticate().await {
+    async fn start_auth(&self) -> zbus::fdo::Result<String> {
+        let (oauth_client, client_id) = Self::oauth_client_from_env()?;
+        self.start_auth_session(oauth_client, &client_id).await
+    }
+
+    async fn submit_auth_code(&self, code: &str) -> zbus::fdo::Result<()> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err(zbus::fdo::Error::Failed(
+                "verification code must not be empty".to_string(),
+            ));
+        }
+        let auth_session = self.auth_session.read().await.clone().ok_or_else(|| {
+            zbus::fdo::Error::Failed(
+                "auth session is not started; call StartAuth first".to_string(),
+            )
+        })?;
+        let token = match auth_session.oauth_client.exchange_code(code, None).await {
             Ok(token) => token,
-            Err(OAuthFlowError::Cancelled) => {
-                self.set_auth_override("unauthorized", "authorization cancelled")
-                    .await;
-                return Ok(());
-            }
             Err(err) => {
                 self.set_auth_override("error", &err.to_string()).await;
                 return Err(zbus::fdo::Error::Failed(format!(
@@ -430,11 +478,19 @@ impl ControlDbusService {
         storage
             .save_oauth_state(&OAuthState::from_oauth_token(&token))
             .map_err(|err| zbus::fdo::Error::Failed(format!("failed to save token: {err}")))?;
+        {
+            let mut auth_session = self.auth_session.write().await;
+            *auth_session = None;
+        }
         self.set_auth_override("authorized", "token saved").await;
         Ok(())
     }
 
     async fn cancel_auth(&self) -> zbus::fdo::Result<()> {
+        {
+            let mut auth_session = self.auth_session.write().await;
+            *auth_session = None;
+        }
         self.set_auth_override("cancelled", "auth request cancelled")
             .await;
         Ok(())
@@ -447,9 +503,22 @@ impl ControlDbusService {
         storage
             .delete_token()
             .map_err(|err| zbus::fdo::Error::Failed(format!("logout failed: {err}")))?;
+        {
+            let mut auth_session = self.auth_session.write().await;
+            *auth_session = None;
+        }
         self.set_auth_override("unauthorized", "token removed")
             .await;
         Ok(())
+    }
+
+    async fn get_auth_start_url(&self) -> zbus::fdo::Result<String> {
+        if let Some(session) = self.auth_session.read().await.as_ref() {
+            return Ok(session.authorize_url.clone());
+        }
+        Err(zbus::fdo::Error::Failed(
+            "auth session is not started".to_string(),
+        ))
     }
 
     async fn run_integration_check(&self) -> zbus::fdo::Result<(String, String)> {
@@ -561,5 +630,67 @@ mod tests {
         let (state, message) = service.run_integration_check().await.unwrap();
         assert!(matches!(state.as_str(), "ok" | "needs_setup"));
         assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn manual_auth_url_contains_client_id() {
+        let url = ControlDbusService::manual_authorize_url("client-1").unwrap();
+        assert!(url.contains("oauth.yandex.ru/authorize"));
+        assert!(url.contains("client_id=client-1"));
+        assert!(url.contains("response_type=code"));
+    }
+
+    #[tokio::test]
+    async fn start_auth_returns_url_and_sets_pending_state() {
+        let service = ControlDbusService::default();
+        let oauth_client = OAuthClient::new("test-client-id", "test-client-secret").unwrap();
+        let url = service
+            .start_auth_session(oauth_client, "test-client-id")
+            .await
+            .unwrap();
+        assert!(url.contains("oauth.yandex.ru/authorize"));
+        assert!(url.contains("client_id=test-client-id"));
+        let (state, message) = service.get_auth_state().await.unwrap();
+        assert_eq!(state, "pending");
+        assert!(message.contains("verification code"));
+        let session_url = service.get_auth_start_url().await.unwrap();
+        assert_eq!(session_url, url);
+    }
+
+    #[tokio::test]
+    async fn submit_auth_code_without_started_session_returns_error() {
+        let service = ControlDbusService::default();
+        let err = service
+            .submit_auth_code("abc")
+            .await
+            .expect_err("expected missing session error");
+        match err {
+            zbus::fdo::Error::Failed(msg) => {
+                assert!(msg.contains("StartAuth"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_auth_clears_started_session() {
+        let service = ControlDbusService::default();
+        let oauth_client = OAuthClient::new("test-client-id", "test-client-secret").unwrap();
+        let _ = service
+            .start_auth_session(oauth_client, "test-client-id")
+            .await
+            .unwrap();
+        service.cancel_auth().await.unwrap();
+        let err = service
+            .get_auth_start_url()
+            .await
+            .expect_err("expected cleared auth session");
+        match err {
+            zbus::fdo::Error::Failed(msg) => assert!(msg.contains("not started")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+        let (state, message) = service.get_auth_state().await.unwrap();
+        assert_eq!(state, "cancelled");
+        assert!(message.contains("cancelled"));
     }
 }

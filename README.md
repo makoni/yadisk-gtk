@@ -138,7 +138,7 @@ nautilus -q
 ```
 
 `install-nautilus-extension.sh` автоматически определяет `extensiondir` через `pkg-config`.
-Если каталог системный и не writable, скрипт сам выполнит `sudo install ...` (попросит пароль).
+Если каталог системный и не writable, скрипт сначала пробует `pkexec` (GUI-диалог пароля), затем fallback на `sudo`.
 
 What it provides in Files (Nautilus):
 - state emblems (`cloud_only` / `cached` / `syncing` / `error`)

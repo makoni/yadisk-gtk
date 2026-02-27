@@ -4298,6 +4298,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "gtk4",
+ "keyring",
  "libadwaita",
  "serde",
  "serde_json",
