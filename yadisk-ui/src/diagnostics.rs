@@ -39,6 +39,19 @@ pub fn print_diagnostics_report(
     integrations: &IntegrationStatus,
     settings: SettingsSnapshot,
 ) -> Result<()> {
+    println!(
+        "{}",
+        diagnostics_report_json(control, service, integrations, settings)?
+    );
+    Ok(())
+}
+
+pub fn diagnostics_report_json(
+    control: Option<&ControlSnapshot>,
+    service: Option<&ServiceStatus>,
+    integrations: &IntegrationStatus,
+    settings: SettingsSnapshot,
+) -> Result<String> {
     let report = DiagnosticsReport {
         service_state: service.map(|s| s.state.clone()),
         dbus: control.map(|snapshot| DbusSnapshot {
@@ -58,6 +71,5 @@ pub fn print_diagnostics_report(
         },
         settings,
     };
-    println!("{}", serde_json::to_string_pretty(&report)?);
-    Ok(())
+    Ok(serde_json::to_string_pretty(&report)?)
 }

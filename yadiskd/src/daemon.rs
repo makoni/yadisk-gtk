@@ -8,17 +8,19 @@ use anyhow::Context;
 use md5::Context as Md5Context;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
-use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient, YadiskClient};
+use yadisk_core::YadiskClient;
+#[cfg(test)]
+use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient};
 use yadisk_integrations::ids::{DBUS_NAME_SYNC, DBUS_OBJECT_PATH_CONTROL, DBUS_OBJECT_PATH_SYNC};
 use zbus::connection::Builder as ConnectionBuilder;
 use zbus::object_server::SignalEmitter;
 
 use crate::dbus_api::{ControlDbusService, SyncDbusService};
-use crate::oauth_flow::OAuthFlow;
-use crate::storage::{OAuthState, TokenStorage};
+use crate::storage::TokenStorage;
 use crate::sync::engine::SyncEngine;
 use crate::sync::index::{FileState, IndexStore};
 use crate::sync::local_watcher::{LocalEvent, start_notify_watcher};
+#[cfg(test)]
 use crate::token_provider::TokenProvider;
 use crate::tray::{TraySyncState, start_status_tray};
 
@@ -84,6 +86,7 @@ impl DaemonConfig {
 pub struct DaemonRuntime {
     config: DaemonConfig,
     engine: Arc<SyncEngine>,
+    auth_ready: bool,
 }
 
 impl DaemonRuntime {
@@ -96,24 +99,34 @@ impl DaemonRuntime {
             .with_context(|| format!("failed to create cache root at {:?}", config.cache_root))?;
 
         let token = resolve_valid_token(None).await?;
+        let auth_ready = !token.trim().is_empty();
         let client = YadiskClient::new(token)?;
         let index = IndexStore::new_default()
             .await
             .context("failed to initialize index store")?;
         let engine = Arc::new(SyncEngine::new(client, index, config.cache_root.clone()));
 
-        Ok(Self { config, engine })
+        Ok(Self {
+            config,
+            engine,
+            auth_ready,
+        })
     }
 
     pub async fn run(self) -> anyhow::Result<()> {
         eprintln!(
-            "[yadiskd] started: sync_root={}, remote_root={}, local_watcher={}",
+            "[yadiskd] started: sync_root={}, remote_root={}, local_watcher={}, auth={}",
             self.config.sync_root.display(),
             self.config.remote_root,
             if self.config.enable_local_watcher {
                 "enabled"
             } else {
                 "disabled"
+            },
+            if self.auth_ready {
+                "ready"
+            } else {
+                "waiting_for_auth"
             }
         );
 
@@ -152,6 +165,7 @@ impl DaemonRuntime {
         let sync_root_available = Arc::new(AtomicBool::new(
             is_sync_root_available(&self.config.sync_root).await,
         ));
+        let cloud_sync_error = Arc::new(AtomicBool::new(false));
         if !sync_root_available.load(Ordering::SeqCst) {
             eprintln!(
                 "[yadiskd] sync root is unavailable: {}",
@@ -177,11 +191,12 @@ impl DaemonRuntime {
         let engine_for_cloud = Arc::clone(&self.engine);
         let remote_root = self.config.remote_root.clone();
         let cloud_poll_interval = self.config.cloud_poll_interval;
-        let tray_state_tx_cloud = tray_state_tx.clone();
         let sync_root_available_cloud = Arc::clone(&sync_root_available);
+        let cloud_sync_error_cloud = Arc::clone(&cloud_sync_error);
+        let auth_ready_cloud = self.auth_ready;
         let cloud_handle = tokio::spawn(async move {
             loop {
-                if !sync_root_available_cloud.load(Ordering::SeqCst) {
+                if !auth_ready_cloud || !sync_root_available_cloud.load(Ordering::SeqCst) {
                     tokio::time::sleep(cloud_poll_interval).await;
                     continue;
                 }
@@ -190,6 +205,7 @@ impl DaemonRuntime {
                     .await
                 {
                     Ok(delta) => {
+                        cloud_sync_error_cloud.store(false, Ordering::SeqCst);
                         if delta.indexed > 0 || delta.deleted > 0 || delta.enqueued_downloads > 0 {
                             eprintln!(
                                 "[yadiskd] cloud delta: indexed={}, deleted={}, enqueued_downloads={}",
@@ -198,8 +214,8 @@ impl DaemonRuntime {
                         }
                     }
                     Err(err) => {
+                        cloud_sync_error_cloud.store(true, Ordering::SeqCst);
                         eprintln!("[yadiskd] cloud sync error: {err}");
-                        let _ = tray_state_tx_cloud.send(TraySyncState::Error);
                     }
                 }
                 tokio::time::sleep(cloud_poll_interval).await;
@@ -208,23 +224,21 @@ impl DaemonRuntime {
 
         let engine_for_worker = Arc::clone(&self.engine);
         let worker_interval = self.config.worker_interval;
-        let tray_state_tx_worker = tray_state_tx.clone();
         let sync_root_available_worker = Arc::clone(&sync_root_available);
+        let auth_ready_worker = self.auth_ready;
         let worker_handle = tokio::spawn(async move {
             loop {
-                if !sync_root_available_worker.load(Ordering::SeqCst) {
+                if !auth_ready_worker || !sync_root_available_worker.load(Ordering::SeqCst) {
                     tokio::time::sleep(worker_interval).await;
                     continue;
                 }
                 match engine_for_worker.run_once().await {
                     Ok(true) => {
                         eprintln!("[yadiskd] worker: processed queued operation");
-                        let _ = tray_state_tx_worker.send(TraySyncState::Syncing);
                     }
                     Ok(false) => {}
                     Err(err) => {
                         eprintln!("[yadiskd] worker error: {err}");
-                        let _ = tray_state_tx_worker.send(TraySyncState::Error);
                     }
                 }
                 tokio::time::sleep(worker_interval).await;
@@ -237,6 +251,7 @@ impl DaemonRuntime {
         let materialize_remote_root = self.config.remote_root.clone();
         let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
         let sync_root_available_materialize = Arc::clone(&sync_root_available);
+        let auth_ready_materialize = self.auth_ready;
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
@@ -246,7 +261,9 @@ impl DaemonRuntime {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
-                if !sync_root_available_materialize.load(Ordering::SeqCst) {
+                if !auth_ready_materialize
+                    || !sync_root_available_materialize.load(Ordering::SeqCst)
+                {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
@@ -311,7 +328,6 @@ impl DaemonRuntime {
         let storage_sync_root = self.config.sync_root.clone();
         let sync_root_available_storage = Arc::clone(&sync_root_available);
         let local_events_enabled_storage = Arc::clone(&local_events_enabled);
-        let tray_state_tx_storage = tray_state_tx.clone();
         let storage_handle = tokio::spawn(async move {
             let mut known = sync_root_available_storage.load(Ordering::SeqCst);
             loop {
@@ -331,7 +347,6 @@ impl DaemonRuntime {
                         );
                         local_events_enabled_storage.store(false, Ordering::SeqCst);
                         engine_for_storage.cancel_all_transfers();
-                        let _ = tray_state_tx_storage.send(TraySyncState::Error);
                     }
                     known = available;
                 }
@@ -366,6 +381,8 @@ impl DaemonRuntime {
         let engine_for_signals = Arc::clone(&self.engine);
         let signal_root = self.config.remote_root.clone();
         let tray_state_tx_signal = tray_state_tx.clone();
+        let sync_root_available_signal = Arc::clone(&sync_root_available);
+        let cloud_sync_error_signal = Arc::clone(&cloud_sync_error);
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
             let mut known_tray_state: Option<TraySyncState> = None;
@@ -397,7 +414,12 @@ impl DaemonRuntime {
                         .has_active_or_queued_work()
                         .await
                         .unwrap_or(false);
-                    let tray_state = tray_state_from_states(&current_states, has_active_work);
+                    let tray_state = effective_tray_state(
+                        &current_states,
+                        has_active_work,
+                        sync_root_available_signal.load(Ordering::SeqCst),
+                        cloud_sync_error_signal.load(Ordering::SeqCst),
+                    );
                     if known_tray_state != Some(tray_state) {
                         let _ = tray_state_tx_signal.send(tray_state);
                         known_tray_state = Some(tray_state);

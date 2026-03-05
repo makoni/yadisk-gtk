@@ -69,6 +69,33 @@ fn tray_state_prioritizes_error_then_activity() {
 }
 
 #[test]
+fn effective_tray_state_prioritizes_connectivity_guards() {
+    let mut states = HashMap::new();
+    states.insert("/A".to_string(), "cached");
+    assert_eq!(
+        effective_tray_state(&states, true, false, false),
+        TraySyncState::Error
+    );
+    assert_eq!(
+        effective_tray_state(&states, true, true, true),
+        TraySyncState::Error
+    );
+}
+
+#[test]
+fn effective_tray_state_recovers_after_cloud_error_clears() {
+    let states = HashMap::new();
+    assert_eq!(
+        effective_tray_state(&states, false, true, true),
+        TraySyncState::Error
+    );
+    assert_eq!(
+        effective_tray_state(&states, false, true, false),
+        TraySyncState::Normal
+    );
+}
+
+#[test]
 fn normalizes_local_events_to_remote_root_prefix() {
     let upload = normalize_local_event_for_remote_root(
         LocalEvent::Upload {

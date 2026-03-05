@@ -1,13 +1,21 @@
+use std::cell::RefCell;
+use std::process::Command;
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gtk4::{gio, glib, prelude::*};
+use libadwaita::prelude::*;
 use yadisk_integrations::ids::APP_ID_GTK;
 
 use crate::control_client::ControlClient;
-use crate::diagnostics::print_diagnostics_report;
-use crate::integration_control::{guided_install_instructions, run_auto_install};
-use crate::service_control::{ServiceAction, run_service_action};
+use crate::diagnostics::diagnostics_report_json;
+use crate::integration_control::{
+    ensure_auto_install_permissions, guided_install_commands, run_auto_install, run_auto_uninstall,
+};
+use crate::service_control::{
+    ServiceAction, auto_import_oauth_credentials, configure_oauth_credentials,
+    oauth_credentials_configured, run_service_action,
+};
 use crate::ui_model::UiModel;
 
 const ACTION_AUTH_START: &str = "action-auth-start";
@@ -19,6 +27,7 @@ const ACTION_DAEMON_RESTART: &str = "action-daemon-restart";
 const ACTION_INTEGRATIONS_CHECK: &str = "action-integrations-check";
 const ACTION_INTEGRATIONS_GUIDED: &str = "action-integrations-guided";
 const ACTION_INTEGRATIONS_AUTO: &str = "action-integrations-auto";
+const ACTION_INTEGRATIONS_REMOVE: &str = "action-integrations-remove";
 const ACTION_AUTOSTART_ENABLE: &str = "action-autostart-enable";
 const ACTION_AUTOSTART_DISABLE: &str = "action-autostart-disable";
 const ACTION_DIAGNOSTICS_DUMP: &str = "action-diagnostics-dump";
@@ -33,6 +42,7 @@ struct Widgets {
     daemon_label: gtk4::Label,
     integration_badge: gtk4::Label,
     integration_label: gtk4::Label,
+    integration_commands_box: gtk4::Box,
     settings_label: gtk4::Label,
     diagnostics_label: gtk4::Label,
     auth_start_button: gtk4::Button,
@@ -40,6 +50,7 @@ struct Widgets {
     auth_logout_button: gtk4::Button,
     autostart_enable_button: gtk4::Button,
     autostart_disable_button: gtk4::Button,
+    integration_guided_commands: Rc<RefCell<Option<Vec<String>>>>,
 }
 
 pub fn run(start_tab: Option<String>) -> Result<()> {
@@ -209,6 +220,9 @@ fn build_pages(
     integrations_card.append(&integrations_header);
     let integration_label = body_label();
     integrations_card.append(&integration_label);
+    let integration_commands_box = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    integration_commands_box.set_visible(false);
+    integrations_card.append(&integration_commands_box);
     let integration_actions = action_row();
     let btn_check = gtk4::Button::with_label("Re-check");
     btn_check.set_widget_name(ACTION_INTEGRATIONS_CHECK);
@@ -227,6 +241,12 @@ fn build_pages(
         "Recommendation",
         "Use Guided Install by default to follow safe host setup steps without elevated automatic actions.",
     ));
+    let integration_remove_row = action_row();
+    let btn_remove = gtk4::Button::with_label("Remove integrations");
+    btn_remove.set_widget_name(ACTION_INTEGRATIONS_REMOVE);
+    btn_remove.add_css_class("destructive-action");
+    integration_remove_row.append(&btn_remove);
+    integrations_content.append(&integration_remove_row);
     stack.add_titled(&integrations, Some("integrations"), "Integrations");
 
     let (settings, settings_content) = page_shell();
@@ -265,7 +285,7 @@ fn build_pages(
     diagnostics_label.add_css_class("monospace");
     diagnostics_card.append(&diagnostics_label);
     let diagnostics_actions = action_row();
-    let btn_dump = gtk4::Button::with_label("Print diagnostics JSON");
+    let btn_dump = gtk4::Button::with_label("Show diagnostics");
     btn_dump.set_widget_name(ACTION_DIAGNOSTICS_DUMP);
     btn_dump.add_css_class("suggested-action");
     diagnostics_actions.append(&btn_dump);
@@ -273,7 +293,7 @@ fn build_pages(
     diagnostics_content.append(&diagnostics_card);
     diagnostics_content.append(&note_card(
         "Support tip",
-        "Use Print diagnostics JSON when reporting issues so service and integration state is captured in one snapshot.",
+        "Use Show diagnostics when reporting issues so service and integration state is captured in one snapshot.",
     ));
     stack.add_titled(&diagnostics, Some("diagnostics"), "Diagnostics");
 
@@ -287,6 +307,7 @@ fn build_pages(
         daemon_label,
         integration_badge,
         integration_label,
+        integration_commands_box,
         settings_label,
         diagnostics_label,
         auth_start_button: btn_auth_start,
@@ -294,6 +315,7 @@ fn build_pages(
         auth_logout_button: btn_logout,
         autostart_enable_button: btn_auto_on,
         autostart_disable_button: btn_auto_off,
+        integration_guided_commands: Rc::new(RefCell::new(None)),
     }
 }
 
@@ -416,7 +438,7 @@ fn note_card(title: &str, text: &str) -> gtk4::Box {
 fn body_label() -> gtk4::Label {
     let label = gtk4::Label::new(None);
     label.set_wrap(true);
-    label.set_selectable(true);
+    label.set_selectable(false);
     label.set_halign(gtk4::Align::Start);
     label.set_xalign(0.0);
     label.add_css_class("body-copy");
@@ -449,14 +471,39 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                     prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
                 }
                 Err(err) => {
-                    show_text_dialog(
-                        &window,
-                        "Start Auth failed",
-                        &format!(
-                            "Could not start authorization.\n\n{}\n\nCheck YADISK_CLIENT_ID/YADISK_CLIENT_SECRET and daemon status.",
-                            err
-                        ),
-                    );
+                    let mut message = err.to_string();
+                    if !oauth_credentials_configured()
+                        && auto_import_oauth_credentials().unwrap_or(false)
+                    {
+                        match start_auth_with_daemon_bootstrap() {
+                            Ok(url) => {
+                                open_browser_url(&url);
+                                prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
+                                refresh_ui(&widgets);
+                                return;
+                            }
+                            Err(import_retry_err) => {
+                                message = import_retry_err.to_string();
+                            }
+                        }
+                    }
+                    if auth_env_missing_error(&message) || !oauth_credentials_configured() {
+                        prompt_oauth_credentials_dialog(
+                            &window,
+                            &stack,
+                            Rc::clone(&widgets),
+                            &message,
+                        );
+                    } else {
+                        show_text_dialog(
+                            &window,
+                            "Start Auth failed",
+                            &format!(
+                                "Could not start authorization.\n\n{}\n\nCheck daemon status and try again.",
+                                message
+                            ),
+                        );
+                    }
                 }
             }
             refresh_ui(&widgets);
@@ -473,11 +520,29 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
     }
     if let Some(button) = find_button(stack, ACTION_LOGOUT) {
         let widgets = Rc::clone(&widgets);
+        let window = window.clone();
         button.connect_clicked(move |_| {
-            if let Ok(client) = ControlClient::connect() {
-                let _ = client.logout();
-            }
-            refresh_ui(&widgets);
+            let dialog = libadwaita::MessageDialog::builder()
+                .transient_for(&window)
+                .heading("Confirm logout")
+                .body("Remove saved credentials and disconnect this account?")
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("logout", "Logout");
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            dialog.set_response_appearance("logout", libadwaita::ResponseAppearance::Destructive);
+            let widgets_for_response = Rc::clone(&widgets);
+            dialog.connect_response(None, move |dialog, response| {
+                if response == "logout"
+                    && let Ok(client) = ControlClient::connect()
+                {
+                    let _ = client.logout();
+                }
+                dialog.hide();
+                refresh_ui(&widgets_for_response);
+            });
+            dialog.present();
         });
     }
     if let Some(button) = find_button(stack, ACTION_DAEMON_START) {
@@ -503,20 +568,102 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
     }
     if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_CHECK) {
         let widgets = Rc::clone(&widgets);
-        button.connect_clicked(move |_| refresh_ui(&widgets));
+        button.connect_clicked(move |_| {
+            widgets.integration_guided_commands.borrow_mut().take();
+            refresh_ui(&widgets);
+        });
     }
     if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_GUIDED) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let lines = guided_install_instructions().join("\n");
-            widgets.integration_label.set_text(&lines);
+            let commands = guided_install_commands();
+            *widgets.integration_guided_commands.borrow_mut() = Some(commands.clone());
+            widgets
+                .integration_label
+                .set_text("Run these commands in a terminal, then press Re-check.");
+            widgets.integration_label.set_selectable(false);
+            render_guided_command_blocks(&widgets.integration_commands_box, &commands);
         });
     }
     if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_AUTO) {
         let widgets = Rc::clone(&widgets);
+        let window = window.clone();
         button.connect_clicked(move |_| {
-            let _ = run_auto_install();
+            widgets.integration_guided_commands.borrow_mut().take();
+            if let Err(err) = ensure_auto_install_permissions() {
+                show_text_dialog(
+                    &window,
+                    "Auto install unavailable",
+                    &format!(
+                        "Automatic install requires write access to the Nautilus extension directory or administrator privileges.\n\n{err}"
+                    ),
+                );
+                refresh_ui(&widgets);
+                return;
+            }
+            if let Err(err) = run_auto_install() {
+                show_text_dialog(
+                    &window,
+                    "Auto install failed",
+                    &format!("Could not install integration components:\n{err}"),
+                );
+                refresh_ui(&widgets);
+                return;
+            }
             refresh_ui(&widgets);
+            prompt_nautilus_restart_dialog(
+                &window,
+                Rc::clone(&widgets),
+                "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems.",
+            );
+        });
+    }
+    if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_REMOVE) {
+        let widgets = Rc::clone(&widgets);
+        let window = window.clone();
+        button.connect_clicked(move |_| {
+            let dialog = libadwaita::MessageDialog::builder()
+                .transient_for(&window)
+                .heading("Confirm integration removal")
+                .body("Remove Nautilus extension, FUSE helper, and installed emblem icons?")
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("remove", "Remove");
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            dialog.set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
+            let widgets_for_response = Rc::clone(&widgets);
+            let window_for_response = window.clone();
+            dialog.connect_response(None, move |dialog, response| {
+                let mut ask_restart = false;
+                if response == "remove" {
+                    widgets_for_response
+                        .integration_guided_commands
+                        .borrow_mut()
+                        .take();
+                    if let Err(err) = run_auto_uninstall() {
+                        show_text_dialog(
+                            &window_for_response,
+                            "Remove integrations failed",
+                            &format!(
+                                "Could not remove all integration files:\n{err}\n\nSome system files may require administrator privileges."
+                            ),
+                        );
+                    } else {
+                        ask_restart = true;
+                    }
+                }
+                dialog.hide();
+                refresh_ui(&widgets_for_response);
+                if ask_restart {
+                    prompt_nautilus_restart_dialog(
+                        &window_for_response,
+                        Rc::clone(&widgets_for_response),
+                        "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays.",
+                    );
+                }
+            });
+            dialog.present();
         });
     }
     if let Some(button) = find_button(stack, ACTION_AUTOSTART_ENABLE) {
@@ -535,14 +682,22 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
     }
     if let Some(button) = find_button(stack, ACTION_DIAGNOSTICS_DUMP) {
         let widgets = Rc::clone(&widgets);
+        let window = window.clone();
         button.connect_clicked(move |_| {
             let model = UiModel::collect();
-            let _ = print_diagnostics_report(
+            match diagnostics_report_json(
                 model.control.as_ref(),
                 model.service.as_ref(),
                 &model.integrations,
                 model.settings.clone(),
-            );
+            ) {
+                Ok(json) => show_text_dialog(&window, "Diagnostics", &json),
+                Err(err) => show_text_dialog(
+                    &window,
+                    "Diagnostics error",
+                    &format!("Failed to build diagnostics report:\n{err}"),
+                ),
+            }
             refresh_ui(&widgets);
         });
     }
@@ -627,16 +782,10 @@ fn prompt_auth_code_dialog(
     message.set_wrap(true);
     message.set_halign(gtk4::Align::Start);
     message.set_xalign(0.0);
-    let url_label = gtk4::Label::new(Some(&auth_url));
-    url_label.set_wrap(true);
-    url_label.set_selectable(true);
-    url_label.set_halign(gtk4::Align::Start);
-    url_label.set_xalign(0.0);
     let entry = gtk4::Entry::new();
     entry.set_placeholder_text(Some("Paste verification code"));
     entry.set_activates_default(true);
     body.append(&message);
-    body.append(&url_label);
     body.append(&entry);
     content.append(&body);
 
@@ -650,17 +799,12 @@ fn prompt_auth_code_dialog(
             if !code.is_empty() {
                 match submit_auth_code_with_daemon_bootstrap(&code) {
                     Ok(()) => {
-                        let post_auth = run_post_auth_steps();
-                        if post_auth.integration_needs_setup {
+                        let integration_needs_setup = run_post_auth_steps();
+                        if integration_needs_setup {
                             stack_for_response.set_visible_child_name("integrations");
                         } else {
                             stack_for_response.set_visible_child_name("sync");
                         }
-                        show_text_dialog(
-                            &window_for_response,
-                            "Authorization completed",
-                            &post_auth_summary_text(&post_auth),
-                        );
                     }
                     Err(err) => {
                         show_text_dialog(
@@ -685,98 +829,155 @@ fn prompt_auth_code_dialog(
     dialog.present();
 }
 
-#[derive(Debug, Clone)]
-struct PostAuthStep {
-    ok: bool,
-    detail: String,
-}
-
-#[derive(Debug, Clone)]
-struct PostAuthSummary {
-    daemon_start: PostAuthStep,
-    autostart_enable: PostAuthStep,
-    integrations: PostAuthStep,
-    integration_needs_setup: bool,
-}
-
-fn run_post_auth_steps() -> PostAuthSummary {
-    let daemon_start = match run_service_action(ServiceAction::Start) {
-        Ok(()) => PostAuthStep {
-            ok: true,
-            detail: "daemon is running".to_string(),
-        },
-        Err(err) => PostAuthStep {
-            ok: false,
-            detail: format!("failed to start daemon: {err}"),
-        },
-    };
-    let autostart_enable = match run_service_action(ServiceAction::EnableAutostart) {
-        Ok(()) => PostAuthStep {
-            ok: true,
-            detail: "autostart enabled".to_string(),
-        },
-        Err(err) => PostAuthStep {
-            ok: false,
-            detail: format!("failed to enable autostart: {err}"),
-        },
-    };
+fn run_post_auth_steps() -> bool {
+    let _ = run_service_action(ServiceAction::Restart)
+        .or_else(|_| run_service_action(ServiceAction::Start));
+    let _ = run_service_action(ServiceAction::EnableAutostart);
     let model = UiModel::collect();
-    let integration_needs_setup =
-        !matches!(model.integration_status, crate::ui_model::UiStatus::Ready);
-    let integrations = if integration_needs_setup {
-        PostAuthStep {
-            ok: false,
-            detail: format!("setup required: {}", model.integration_summary),
-        }
-    } else {
-        PostAuthStep {
-            ok: true,
-            detail: model.integration_summary,
-        }
-    };
-    PostAuthSummary {
-        daemon_start,
-        autostart_enable,
-        integrations,
-        integration_needs_setup,
-    }
-}
-
-fn post_auth_summary_text(summary: &PostAuthSummary) -> String {
-    let format_step = |step: &PostAuthStep| {
-        if step.ok {
-            format!("ok ({})", step.detail)
-        } else {
-            format!("needs attention ({})", step.detail)
-        }
-    };
-    format!(
-        "Next steps after authorization:\n- Daemon: {}\n- Autostart: {}\n- Files integration: {}\n{}",
-        format_step(&summary.daemon_start),
-        format_step(&summary.autostart_enable),
-        format_step(&summary.integrations),
-        if summary.integration_needs_setup {
-            "Open the Integrations tab and run Guided Install."
-        } else {
-            "Everything is ready. You can start syncing now."
-        }
-    )
+    !matches!(model.integration_status, crate::ui_model::UiStatus::Ready)
 }
 
 fn show_text_dialog(window: &libadwaita::ApplicationWindow, title: &str, text: &str) {
+    let dialog = libadwaita::MessageDialog::builder()
+        .transient_for(window)
+        .heading(title)
+        .body(text)
+        .build();
+    dialog.add_response("ok", "OK");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.connect_response(Some("ok"), |dialog, _| {
+        dialog.hide();
+    });
+    dialog.present();
+}
+
+fn prompt_nautilus_restart_dialog(
+    window: &libadwaita::ApplicationWindow,
+    widgets: Rc<Widgets>,
+    reason: &str,
+) {
+    let dialog = libadwaita::MessageDialog::builder()
+        .transient_for(window)
+        .heading("Restart Files now?")
+        .body(reason)
+        .build();
+    dialog.add_response("later", "Not now");
+    dialog.add_response("restart", "Restart Files");
+    dialog.set_default_response(Some("later"));
+    dialog.set_close_response("later");
+    dialog.set_response_appearance("restart", libadwaita::ResponseAppearance::Suggested);
+    let window_for_response = window.clone();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "restart"
+            && let Err(err) = restart_nautilus()
+        {
+            show_text_dialog(
+                &window_for_response,
+                "Restart Files failed",
+                &format!("Could not restart Nautilus:\n{err}"),
+            );
+        }
+        dialog.hide();
+        refresh_ui(&widgets);
+    });
+    dialog.present();
+}
+
+fn restart_nautilus() -> Result<()> {
+    let quit_status = Command::new("nautilus")
+        .arg("-q")
+        .status()
+        .context("failed to run nautilus -q")?;
+    let _quit_failed_nonfatal = !quit_status.success() && quit_status.code() != Some(255);
+    Command::new("nautilus")
+        .arg("--new-window")
+        .spawn()
+        .context("failed to relaunch Nautilus after quit")?;
+    Ok(())
+}
+
+fn auth_env_missing_error(err: &str) -> bool {
+    err.contains("YADISK_CLIENT_ID is missing")
+        || err.contains("YADISK_CLIENT_SECRET is missing")
+        || err.contains("YADISK_CLIENT_ID is not set")
+        || err.contains("YADISK_CLIENT_SECRET is not set")
+}
+
+fn prompt_oauth_credentials_dialog(
+    window: &libadwaita::ApplicationWindow,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+    error_message: &str,
+) {
     let dialog = gtk4::Dialog::builder()
-        .title(title)
+        .title("OAuth credentials required")
         .modal(true)
         .transient_for(window)
         .build();
-    dialog.add_button("OK", gtk4::ResponseType::Close);
-    let label = gtk4::Label::new(Some(text));
-    label.set_wrap(true);
-    label.set_selectable(true);
-    label.set_halign(gtk4::Align::Start);
-    label.set_xalign(0.0);
-    dialog.content_area().append(&label);
-    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
+    dialog.add_button("Save and retry", gtk4::ResponseType::Accept);
+    dialog.set_default_response(gtk4::ResponseType::Accept);
+    let content = dialog.content_area();
+    let body = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    let message = gtk4::Label::new(Some(&format!(
+        "Authorization cannot start because OAuth credentials are missing in daemon service.\n\n{}\n\nEnter Yandex OAuth client id and secret:",
+        error_message
+    )));
+    message.set_wrap(true);
+    message.set_halign(gtk4::Align::Start);
+    message.set_xalign(0.0);
+    let client_id = gtk4::Entry::new();
+    client_id.set_placeholder_text(Some("YADISK_CLIENT_ID"));
+    let client_secret = gtk4::Entry::new();
+    client_secret.set_placeholder_text(Some("YADISK_CLIENT_SECRET"));
+    client_secret.set_visibility(false);
+    body.append(&message);
+    body.append(&client_id);
+    body.append(&client_secret);
+    content.append(&body);
+
+    let client_id_for_response = client_id.clone();
+    let client_secret_for_response = client_secret.clone();
+    let window_for_response = window.clone();
+    let stack_for_response = stack.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk4::ResponseType::Accept {
+            let id = client_id_for_response.text().trim().to_string();
+            let secret = client_secret_for_response.text().trim().to_string();
+            match configure_oauth_credentials(&id, &secret) {
+                Ok(()) => match start_auth_with_daemon_bootstrap() {
+                    Ok(url) => {
+                        open_browser_url(&url);
+                        prompt_auth_code_dialog(
+                            &window_for_response,
+                            &stack_for_response,
+                            Rc::clone(&widgets),
+                            url,
+                        );
+                    }
+                    Err(err) => {
+                        show_text_dialog(
+                            &window_for_response,
+                            "Start Auth failed",
+                            &format!(
+                                "Could not start authorization after saving credentials:\n{err}"
+                            ),
+                        );
+                    }
+                },
+                Err(err) => {
+                    show_text_dialog(
+                        &window_for_response,
+                        "Save credentials failed",
+                        &format!("Could not save OAuth credentials:\n{err}"),
+                    );
+                }
+            }
+            refresh_ui(&widgets);
+        }
+        dialog.close();
+    });
     dialog.present();
 }
 
@@ -793,9 +994,27 @@ fn refresh_ui(widgets: &Widgets) {
     update_badge(&widgets.integration_badge, model.integration_status);
     widgets.account_label.set_text(&model.auth_summary);
     widgets.daemon_label.set_text(&model.daemon_summary);
-    widgets
-        .integration_label
-        .set_text(&model.integration_summary);
+    if let Some(commands) = widgets.integration_guided_commands.borrow().as_ref() {
+        widgets
+            .integration_label
+            .set_text("Run these commands in a terminal, then press Re-check.");
+        widgets.integration_label.set_selectable(false);
+        if widgets.integration_commands_box.first_child().is_none() {
+            render_guided_command_blocks(&widgets.integration_commands_box, commands);
+        } else {
+            widgets.integration_commands_box.set_visible(true);
+        }
+    } else {
+        widgets
+            .integration_label
+            .set_text(&model.integration_summary);
+        widgets.integration_label.set_selectable(false);
+        if widgets.integration_commands_box.first_child().is_some() {
+            render_guided_command_blocks(&widgets.integration_commands_box, &[]);
+        } else {
+            widgets.integration_commands_box.set_visible(false);
+        }
+    }
     widgets.settings_label.set_text(&format!(
         "Sync folder: {}\nCache folder: {}\nRemote root: {}\nCloud poll interval (s): {}\nWorker loop (ms): {}\nLocal watcher enabled: {}\nAutostart: {}",
         model.settings.sync_root,
@@ -810,6 +1029,8 @@ fn refresh_ui(widgets: &Widgets) {
         "Daemon status: {:?}\nAuth status: {:?}\nIntegrations status: {:?}",
         model.daemon_status, model.auth_status, model.integration_status
     ));
+    widgets.settings_label.set_selectable(false);
+    widgets.diagnostics_label.set_selectable(false);
     apply_action_visibility(widgets, &model);
 }
 
@@ -924,6 +1145,69 @@ fn update_badge(label: &gtk4::Label, status: crate::ui_model::UiStatus) {
             label.set_text("Unknown");
             label.add_css_class("status-unknown");
         }
+    }
+}
+
+fn render_guided_command_blocks(container: &gtk4::Box, commands: &[String]) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+    container.set_visible(!commands.is_empty());
+    for (index, command) in commands.iter().enumerate() {
+        let step_title = gtk4::Label::new(Some(&format!(
+            "{}. {}",
+            index + 1,
+            guided_step_title(index)
+        )));
+        step_title.set_halign(gtk4::Align::Start);
+        step_title.set_xalign(0.0);
+        step_title.set_wrap(true);
+        step_title.add_css_class("body-copy");
+        container.append(&step_title);
+
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        row.add_css_class("section-muted");
+        row.set_spacing(12);
+        row.set_margin_top(2);
+        row.set_margin_bottom(8);
+        row.set_margin_start(8);
+        row.set_margin_end(8);
+        row.set_hexpand(true);
+
+        let command_label = gtk4::Label::new(Some(command));
+        command_label.add_css_class("monospace");
+        command_label.set_selectable(true);
+        command_label.set_xalign(0.0);
+        command_label.set_hexpand(true);
+        command_label.set_margin_start(10);
+        command_label.set_margin_top(8);
+        command_label.set_margin_bottom(8);
+        row.append(&command_label);
+
+        let copy_button = gtk4::Button::from_icon_name("edit-copy-symbolic");
+        copy_button.add_css_class("flat");
+        copy_button.set_tooltip_text(Some("Copy command"));
+        copy_button.set_margin_end(8);
+        copy_button.set_margin_top(4);
+        copy_button.set_margin_bottom(4);
+        let command_text = command.clone();
+        copy_button.connect_clicked(move |_| {
+            if let Some(display) = gtk4::gdk::Display::default() {
+                display.clipboard().set_text(&command_text);
+            }
+        });
+        row.append(&copy_button);
+        container.append(&row);
+    }
+}
+
+fn guided_step_title(index: usize) -> &'static str {
+    match index {
+        0 => "Install/update Nautilus extension",
+        1 => "Install/update FUSE helper",
+        2 => "Restart Files",
+        3 => "Re-check integration status",
+        _ => "Run command",
     }
 }
 

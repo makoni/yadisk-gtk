@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -6,6 +6,11 @@ use anyhow::{Context, Result};
 const NAUTILUS_LIB_NAME: &str = "libyadisk_nautilus.so";
 const FUSE_BIN_NAME: &str = "yadisk-fuse";
 const ICON_NAME: &str = "cloud-outline-thin-symbolic.svg";
+const ICON_NAMES: [&str; 3] = [
+    "check-round-outline-symbolic.svg",
+    "cloud-outline-thin-symbolic.svg",
+    "update-symbolic.svg",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationStatus {
@@ -66,19 +71,29 @@ pub fn detect_integration_status() -> IntegrationStatus {
 }
 
 pub fn guided_install_instructions() -> Vec<String> {
-    let root = repo_root();
+    let commands = guided_install_commands();
     vec![
         "Guided integration setup:".to_string(),
+        format!("1) Install/update Nautilus extension: {}", commands[0]),
+        format!("2) Install/update FUSE helper: {}", commands[1]),
+        format!("3) Restart Files: {}", commands[2]),
+        format!("4) Re-check status: {}", commands[3]),
+    ]
+}
+
+pub fn guided_install_commands() -> Vec<String> {
+    let root = repo_root();
+    vec![
         format!(
-            "1) Install/update Nautilus extension: bash {}/packaging/host/install-nautilus-extension.sh",
+            "bash {}/packaging/host/install-nautilus-extension.sh",
             root.display()
         ),
         format!(
-            "2) Install/update FUSE helper: bash {}/packaging/host/install-yadisk-fuse.sh",
+            "bash {}/packaging/host/install-yadisk-fuse.sh",
             root.display()
         ),
-        "3) Restart Files: nautilus -q".to_string(),
-        "4) Re-check status: yadisk-ui --check-integrations".to_string(),
+        "nautilus -q".to_string(),
+        "yadisk-ui --check-integrations".to_string(),
     ]
 }
 
@@ -86,6 +101,34 @@ pub fn run_auto_install() -> Result<()> {
     let root = repo_root();
     run_script(root.join("packaging/host/install-nautilus-extension.sh"))?;
     run_script(root.join("packaging/host/install-yadisk-fuse.sh"))?;
+    Ok(())
+}
+
+pub fn ensure_auto_install_permissions() -> Result<()> {
+    let ext_dir = install_nautilus_extension_dir();
+    if is_dir_writable(&ext_dir) {
+        return Ok(());
+    }
+    if command_exists("pkexec") || command_exists("sudo") {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "not enough permissions for {} and no pkexec/sudo available",
+        ext_dir.display()
+    );
+}
+
+pub fn run_auto_uninstall() -> Result<()> {
+    for base in nautilus_candidate_paths() {
+        remove_if_exists(base.join(NAUTILUS_LIB_NAME))?;
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        remove_if_exists(home.join(".local/bin").join(FUSE_BIN_NAME))?;
+        let emblem_dir = home.join(".local/share/icons/hicolor/scalable/emblems");
+        for icon in ICON_NAMES {
+            remove_if_exists(emblem_dir.join(icon))?;
+        }
+    }
     Ok(())
 }
 
@@ -98,6 +141,108 @@ fn run_script(path: PathBuf) -> Result<()> {
         return Ok(());
     }
     anyhow::bail!("script failed: {} (status {status})", path.display());
+}
+
+fn remove_if_exists(path: PathBuf) -> Result<()> {
+    if path.is_file() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                if !remove_with_privileges(&path)? {
+                    return Err(err)
+                        .with_context(|| format!("failed to remove {}", path.display()));
+                }
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to remove {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn remove_with_privileges(path: &Path) -> Result<bool> {
+    if command_exists("pkexec")
+        && (std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some())
+    {
+        let status = Command::new("pkexec")
+            .arg("rm")
+            .arg("-f")
+            .arg(path)
+            .status()
+            .with_context(|| format!("failed to run pkexec rm for {}", path.display()))?;
+        if status.success() {
+            return Ok(true);
+        }
+    }
+    if command_exists("sudo")
+        && let Ok(status) = Command::new("sudo")
+            .arg("-n")
+            .arg("rm")
+            .arg("-f")
+            .arg(path)
+            .status()
+        && status.success()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn command_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join(name).is_file()))
+}
+
+fn install_nautilus_extension_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = pkg_config_extension_dir() {
+        return path;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/lib/nautilus/extensions-4"))
+        .unwrap_or_else(|| PathBuf::from(".local/lib/nautilus/extensions-4"))
+}
+
+fn pkg_config_extension_dir() -> Option<PathBuf> {
+    let output = Command::new("pkg-config")
+        .arg("--variable=extensiondir")
+        .arg("libnautilus-extension-4")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
+
+fn is_dir_writable(path: &Path) -> bool {
+    if path.exists() && path.is_dir() {
+        return can_create_probe_file(path);
+    }
+    path.parent().is_some_and(can_create_probe_file)
+}
+
+fn can_create_probe_file(dir: &Path) -> bool {
+    let probe = dir.join(format!(".yadisk-write-check-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn nautilus_candidate_paths() -> Vec<PathBuf> {

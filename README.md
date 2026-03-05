@@ -67,10 +67,16 @@ YADISK_TOKEN=<your_token> cargo run -p yadiskd
 export YADISK_CLIENT_ID=<client_id>
 export YADISK_CLIENT_SECRET=<client_secret>
 cargo run -p yadiskd
-# By default yadiskd opens system browser via portal and captures code automatically.
-# In graphical GNOME session with `zenity` installed it also shows native auth dialogs.
-# Fallback (headless/manual): export YADISK_OAUTH_FORCE_MANUAL=1
-# Optional timeout for browser callback: export YADISK_OAUTH_TIMEOUT_SECS=180
+# For systemd --user service mode, store the same values in:
+#   ~/.config/yadisk-gtk/oauth.env
+# with lines:
+#   YADISK_CLIENT_ID="..."
+#   YADISK_CLIENT_SECRET="..."
+#   # optional if your OAuth app requires a fixed callback URL
+#   YADISK_REDIRECT_URI="https://your-registered-callback"
+# yadisk-ui can auto-import these keys from project .env on first Start Auth.
+# yadiskd itself is non-interactive in service mode.
+# OAuth browser/code UX is handled by yadisk-ui (Start Auth + Submit code).
 
 # Logout (remove saved OAuth token and force new auth on next start)
 cargo run -p yadiskd -- --logout

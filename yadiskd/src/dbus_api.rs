@@ -153,6 +153,7 @@ pub struct ControlDbusService {
 struct AuthSession {
     oauth_client: OAuthClient,
     authorize_url: String,
+    redirect_uri: Option<String>,
 }
 
 impl ControlDbusService {
@@ -196,13 +197,28 @@ impl ControlDbusService {
         Ok((oauth_client, client_id))
     }
 
-    fn manual_authorize_url(client_id: &str) -> Result<String, zbus::fdo::Error> {
+    fn oauth_redirect_uri_from_env() -> Option<String> {
+        let value = std::env::var("YADISK_REDIRECT_URI").ok()?;
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            return None;
+        }
+        Some(value)
+    }
+
+    fn manual_authorize_url(
+        client_id: &str,
+        redirect_uri: Option<&str>,
+    ) -> Result<String, zbus::fdo::Error> {
         let mut url = Url::parse("https://oauth.yandex.ru/authorize")
             .map_err(|err| zbus::fdo::Error::Failed(format!("oauth URL build failed: {err}")))?;
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("response_type", "code");
             query.append_pair("client_id", client_id);
+            if let Some(redirect_uri) = redirect_uri {
+                query.append_pair("redirect_uri", redirect_uri);
+            }
         }
         Ok(url.to_string())
     }
@@ -212,12 +228,14 @@ impl ControlDbusService {
         oauth_client: OAuthClient,
         client_id: &str,
     ) -> zbus::fdo::Result<String> {
-        let authorize_url = Self::manual_authorize_url(client_id)?;
+        let redirect_uri = Self::oauth_redirect_uri_from_env();
+        let authorize_url = Self::manual_authorize_url(client_id, redirect_uri.as_deref())?;
         {
             let mut auth_session = self.auth_session.write().await;
             *auth_session = Some(AuthSession {
                 oauth_client,
                 authorize_url: authorize_url.clone(),
+                redirect_uri,
             });
         }
         self.set_auth_override("pending", "waiting for verification code")
@@ -462,7 +480,11 @@ impl ControlDbusService {
                 "auth session is not started; call StartAuth first".to_string(),
             )
         })?;
-        let token = match auth_session.oauth_client.exchange_code(code, None).await {
+        let token = match auth_session
+            .oauth_client
+            .exchange_code(code, auth_session.redirect_uri.as_deref())
+            .await
+        {
             Ok(token) => token,
             Err(err) => {
                 self.set_auth_override("error", &err.to_string()).await;
@@ -634,10 +656,21 @@ mod tests {
 
     #[test]
     fn manual_auth_url_contains_client_id() {
-        let url = ControlDbusService::manual_authorize_url("client-1").unwrap();
+        let url =
+            ControlDbusService::manual_authorize_url("client-1", Some("http://localhost/callback"))
+                .unwrap();
         assert!(url.contains("oauth.yandex.ru/authorize"));
         assert!(url.contains("client_id=client-1"));
         assert!(url.contains("response_type=code"));
+        assert!(url.contains("redirect_uri="));
+    }
+
+    #[test]
+    fn manual_auth_url_without_redirect_omits_redirect_param() {
+        let url = ControlDbusService::manual_authorize_url("client-1", None).unwrap();
+        assert!(url.contains("oauth.yandex.ru/authorize"));
+        assert!(url.contains("client_id=client-1"));
+        assert!(!url.contains("redirect_uri="));
     }
 
     #[tokio::test]

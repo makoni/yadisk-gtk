@@ -17,4 +17,4 @@ zbus = { version = "5.13", default-features = false, features = ["blocking-api",
 keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust", "vendored"] }
 yadisk-integrations = { path = "../yadisk-integrations" }
 gtk4 = { version = "0.9", optional = true }
-libadwaita = { version = "0.7", optional = true }
+libadwaita = { version = "0.7", optional = true, features = ["v1_2"] }

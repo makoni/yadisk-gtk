@@ -15,7 +15,10 @@ use diagnostics::print_diagnostics_report;
 use integration_control::{
     detect_integration_status, guided_install_instructions, run_auto_install,
 };
-use service_control::{ServiceAction, run_service_action};
+use service_control::{
+    ServiceAction, auto_import_oauth_credentials, configure_oauth_credentials,
+    oauth_credentials_configured, run_service_action,
+};
 use settings::read_settings_snapshot;
 use ui_model::{UiModel, UiStatus};
 
@@ -130,6 +133,18 @@ fn main() -> anyhow::Result<()> {
         CliMode::InstallIntegrationsAuto => run_auto_install()?,
         _ => {}
     }
+    if matches!(
+        mode,
+        CliMode::StartDaemon
+            | CliMode::StopDaemon
+            | CliMode::RestartDaemon
+            | CliMode::EnableAutostart
+            | CliMode::DisableAutostart
+            | CliMode::InstallIntegrationsGuided
+            | CliMode::InstallIntegrationsAuto
+    ) {
+        return Ok(());
+    }
 
     let client = ControlClient::connect().ok();
     match mode {
@@ -189,7 +204,19 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn start_auth_via_control(client: Option<&ControlClient>) -> anyhow::Result<()> {
-    let url = start_auth_request(client)?;
+    let url = match start_auth_request(client) {
+        Ok(url) => url,
+        Err(err) => {
+            if !oauth_credentials_configured() && auto_import_oauth_credentials()? {
+                start_auth_request(None)?
+            } else if auth_env_missing_error(&err.to_string()) || !oauth_credentials_configured() {
+                configure_oauth_credentials_from_stdin()?;
+                start_auth_request(None)?
+            } else {
+                return Err(err);
+            }
+        }
+    };
     println!("Open this URL in your browser:\n{url}");
     print!("Enter the verification code: ");
     std::io::stdout().flush()?;
@@ -198,6 +225,26 @@ fn start_auth_via_control(client: Option<&ControlClient>) -> anyhow::Result<()> 
     submit_auth_code_request(input.trim())?;
     run_post_auth_steps_cli();
     Ok(())
+}
+
+fn auth_env_missing_error(err: &str) -> bool {
+    err.contains("YADISK_CLIENT_ID is missing")
+        || err.contains("YADISK_CLIENT_SECRET is missing")
+        || err.contains("YADISK_CLIENT_ID is not set")
+        || err.contains("YADISK_CLIENT_SECRET is not set")
+}
+
+fn configure_oauth_credentials_from_stdin() -> anyhow::Result<()> {
+    println!("OAuth credentials are required for daemon authorization.");
+    print!("Enter YADISK_CLIENT_ID: ");
+    std::io::stdout().flush()?;
+    let mut client_id = String::new();
+    std::io::stdin().read_line(&mut client_id)?;
+    print!("Enter YADISK_CLIENT_SECRET: ");
+    std::io::stdout().flush()?;
+    let mut client_secret = String::new();
+    std::io::stdin().read_line(&mut client_secret)?;
+    configure_oauth_credentials(client_id.trim(), client_secret.trim())
 }
 
 fn start_auth_request(client: Option<&ControlClient>) -> anyhow::Result<String> {
@@ -239,9 +286,11 @@ fn submit_auth_code_request(code: &str) -> anyhow::Result<()> {
 
 fn run_post_auth_steps_cli() {
     println!("Post-auth setup:");
-    match run_service_action(ServiceAction::Start) {
-        Ok(()) => println!("- Daemon: running"),
-        Err(err) => eprintln!("- Daemon: failed to start ({err})"),
+    match run_service_action(ServiceAction::Restart)
+        .or_else(|_| run_service_action(ServiceAction::Start))
+    {
+        Ok(()) => println!("- Daemon: restarted with updated credentials"),
+        Err(err) => eprintln!("- Daemon: failed to restart ({err})"),
     }
     match run_service_action(ServiceAction::EnableAutostart) {
         Ok(()) => println!("- Autostart: enabled"),

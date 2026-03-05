@@ -13,58 +13,47 @@ fn tray_state_from_states(
     TraySyncState::Normal
 }
 
-async fn resolve_valid_token(base_url: Option<&str>) -> anyhow::Result<String> {
+fn effective_tray_state(
+    states: &HashMap<String, &'static str>,
+    has_active_work: bool,
+    sync_root_available: bool,
+    cloud_sync_error: bool,
+) -> TraySyncState {
+    if !sync_root_available || cloud_sync_error {
+        return TraySyncState::Error;
+    }
+    tray_state_from_states(states, has_active_work)
+}
+
+async fn resolve_valid_token(_base_url: Option<&str>) -> anyhow::Result<String> {
     match std::env::var("YADISK_TOKEN") {
         Ok(token) => Ok(token),
         Err(_) => {
-            let storage = TokenStorage::new()
+            let storage = match tokio::time::timeout(Duration::from_secs(3), TokenStorage::new())
                 .await
-                .context("failed to initialize token storage")?;
-            let state = match storage.get_oauth_state() {
-                Ok(state) => state,
-                Err(_) => authenticate_and_store(&storage).await?,
+            {
+                Ok(Ok(storage)) => storage,
+                Ok(Err(err)) => {
+                    eprintln!("[yadiskd] warning: token storage unavailable at startup: {err}");
+                    return Ok(String::new());
+                }
+                Err(_) => {
+                    eprintln!("[yadiskd] warning: token storage init timed out at startup");
+                    return Ok(String::new());
+                }
             };
-            let oauth_client = oauth_client_from_env(base_url)?;
-            let mut provider = TokenProvider::new(state, oauth_client);
-            let info = fetch_disk_info_with_retry(&mut provider, base_url)
-                .await
-                .context("failed to fetch disk info")?;
-            let _ = info;
-            storage
-                .save_oauth_state(provider.state())
-                .context("failed to persist oauth state")?;
-            Ok(provider.state().access_token.clone())
+            Ok(match storage.get_oauth_state() {
+                Ok(state) => state.access_token,
+                Err(err) => {
+                    eprintln!("[yadiskd] warning: saved token is unavailable at startup: {err}");
+                    String::new()
+                }
+            })
         }
     }
 }
 
-async fn authenticate_and_store(storage: &TokenStorage) -> anyhow::Result<OAuthState> {
-    let client_id = std::env::var("YADISK_CLIENT_ID").context("YADISK_CLIENT_ID is not set")?;
-    let client_secret =
-        std::env::var("YADISK_CLIENT_SECRET").context("YADISK_CLIENT_SECRET is not set")?;
-    let flow = OAuthFlow::new(client_id, client_secret);
-    let token = flow.authenticate().await?;
-    let state = OAuthState::from_oauth_token(&token);
-    storage
-        .save_oauth_state(&state)
-        .context("failed to save token")?;
-    Ok(state)
-}
-
-fn oauth_client_from_env(base_url: Option<&str>) -> anyhow::Result<Option<OAuthClient>> {
-    match (
-        std::env::var("YADISK_CLIENT_ID"),
-        std::env::var("YADISK_CLIENT_SECRET"),
-    ) {
-        (Ok(client_id), Ok(client_secret)) => Ok(Some(match base_url {
-            Some(url) => OAuthClient::with_base_url(url, client_id, client_secret)
-                .context("invalid oauth base url/config")?,
-            None => OAuthClient::new(client_id, client_secret).context("invalid oauth config")?,
-        })),
-        _ => Ok(None),
-    }
-}
-
+#[cfg(test)]
 async fn fetch_disk_info_with_retry(
     provider: &mut TokenProvider,
     base_url: Option<&str>,
@@ -88,6 +77,7 @@ async fn fetch_disk_info_with_retry(
     }
 }
 
+#[cfg(test)]
 fn build_client(
     base_url: Option<&str>,
     token: &str,

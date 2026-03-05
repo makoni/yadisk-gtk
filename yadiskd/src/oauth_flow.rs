@@ -213,7 +213,7 @@ fn prefers_portal_loopback_flow() -> bool {
     if env_flag("YADISK_OAUTH_FORCE_MANUAL") {
         return false;
     }
-    has_graphical_session()
+    has_graphical_session() || has_non_empty_env("DBUS_SESSION_BUS_ADDRESS")
 }
 
 fn has_graphical_session() -> bool {
@@ -364,8 +364,9 @@ fn prompt_ui(
 }
 
 fn zenity_info(title: &str, text: &str) -> Result<(), OAuthFlowError> {
+    let text = escape_zenity_markup(text);
     let status = Command::new("zenity")
-        .args(["--info", "--title", title, "--text", text])
+        .args(["--info", "--title", title, "--text", &text])
         .status()?;
     if status.success() {
         Ok(())
@@ -380,13 +381,14 @@ fn zenity_question(
     ok_label: &str,
     cancel_label: &str,
 ) -> Result<bool, OAuthFlowError> {
+    let text = escape_zenity_markup(text);
     let status = Command::new("zenity")
         .args([
             "--question",
             "--title",
             title,
             "--text",
-            text,
+            &text,
             "--ok-label",
             ok_label,
             "--cancel-label",
@@ -401,13 +403,20 @@ fn zenity_question(
 }
 
 fn zenity_entry(title: &str, text: &str) -> Result<String, OAuthFlowError> {
+    let text = escape_zenity_markup(text);
     let output = Command::new("zenity")
-        .args(["--entry", "--title", title, "--text", text])
+        .args(["--entry", "--title", title, "--text", &text])
         .output()?;
     if !output.status.success() {
         return Err(OAuthFlowError::Cancelled);
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn escape_zenity_markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -464,5 +473,13 @@ mod tests {
         let err = OAuthFlowError::MissingCode;
         let msg = map_error_for_ui(&err);
         assert!(!msg.body.is_empty());
+    }
+
+    #[test]
+    fn escapes_zenity_markup_entities() {
+        assert_eq!(
+            escape_zenity_markup("a&b<c>d"),
+            "a&amp;b&lt;c&gt;d".to_string()
+        );
     }
 }

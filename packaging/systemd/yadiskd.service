@@ -9,7 +9,8 @@ ExecStart=%h/.local/bin/yadiskd
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
-Environment=YADISK_SYNC_DIR=%h/Yandex Disk
+Environment="YADISK_SYNC_DIR=%h/Yandex Disk"
+EnvironmentFile=-%h/.config/yadisk-gtk/oauth.env
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=yadiskd
