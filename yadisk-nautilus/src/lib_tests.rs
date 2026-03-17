@@ -93,3 +93,15 @@ fn unsupported_signal_variant_is_defined() {
     let err = ExtensionError::UnsupportedSignal("test".to_string());
     assert!(format!("{err}").contains("unsupported"));
 }
+
+#[test]
+fn from_dbus_maps_explicit_cloud_only() {
+    assert_eq!(SyncUiState::from_dbus("cloud_only"), SyncUiState::CloudOnly);
+}
+
+#[test]
+fn from_dbus_unknown_value_defaults_to_cloud_only() {
+    // Unknown D-Bus state values should default to CloudOnly (with a warning logged)
+    assert_eq!(SyncUiState::from_dbus("unknown_state"), SyncUiState::CloudOnly);
+    assert_eq!(SyncUiState::from_dbus(""), SyncUiState::CloudOnly);
+}

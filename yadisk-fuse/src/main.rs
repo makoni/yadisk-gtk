@@ -60,23 +60,19 @@ mod app {
         }
     }
 
-    struct DbusDownloader {
-        connection: Option<Connection>,
-    }
+    struct DbusDownloader;
 
     impl DbusDownloader {
         fn new() -> Self {
-            Self {
-                connection: Connection::session().ok(),
-            }
+            Self
         }
 
         fn download(&self, path: &str) -> bool {
-            let Some(connection) = &self.connection else {
+            let Ok(connection) = Connection::session() else {
                 return false;
             };
             let Ok(proxy) = Proxy::new(
-                connection,
+                &connection,
                 DBUS_NAME_SYNC,
                 DBUS_OBJECT_PATH_SYNC,
                 DBUS_INTERFACE_SYNC,
@@ -96,14 +92,14 @@ mod app {
     }
 
     impl YadiskFuseFs {
-        fn new(index: IndexStore, cache_root: PathBuf) -> anyhow::Result<Self> {
-            Ok(Self {
-                rt: Runtime::new()?,
+        fn new(rt: Runtime, index: IndexStore, cache_root: PathBuf) -> Self {
+            Self {
+                rt,
                 index: Arc::new(index),
                 cache_root,
                 inodes: Mutex::new(InodeMap::new()),
                 downloader: DbusDownloader::new(),
-            })
+            }
         }
 
         fn path_from_ino(&self, ino: u64) -> Option<String> {
@@ -440,7 +436,7 @@ mod app {
                     .join("yadisk-gtk")
             });
         std::fs::create_dir_all(&mountpoint)?;
-        let fs = YadiskFuseFs::new(index, cache_root)?;
+        let fs = YadiskFuseFs::new(rt, index, cache_root);
         let options = vec![
             MountOption::FSName("yadisk-fuse".to_string()),
             MountOption::DefaultPermissions,

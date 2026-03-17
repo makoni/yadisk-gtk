@@ -421,3 +421,83 @@ async fn requeue_op_last_error_at_is_current_time_not_retry_at() {
         "last_error_at should be in the past (current time), not in the future"
     );
 }
+
+#[tokio::test]
+async fn like_query_escapes_underscore_in_path() {
+    let store = make_store().await;
+    // Item with underscore in path
+    store
+        .upsert_item(&ItemInput {
+            path: "/My_Docs/A.txt".into(),
+            parent_path: Some("/My_Docs".into()),
+            name: "A.txt".into(),
+            item_type: ItemType::File,
+            size: Some(1),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+    // Item that would match if _ were a wildcard
+    store
+        .upsert_item(&ItemInput {
+            path: "/MyXDocs/B.txt".into(),
+            parent_path: Some("/MyXDocs".into()),
+            name: "B.txt".into(),
+            item_type: ItemType::File,
+            size: Some(1),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+
+    let items = store.list_items_by_prefix("/My_Docs").await.unwrap();
+    assert_eq!(items.len(), 1, "underscore must not match arbitrary character");
+    assert_eq!(items[0].path, "/My_Docs/A.txt");
+}
+
+#[tokio::test]
+async fn like_query_escapes_percent_in_path() {
+    let store = make_store().await;
+    store
+        .upsert_item(&ItemInput {
+            path: "/100%Done/A.txt".into(),
+            parent_path: Some("/100%Done".into()),
+            name: "A.txt".into(),
+            item_type: ItemType::File,
+            size: Some(1),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_item(&ItemInput {
+            path: "/Other/B.txt".into(),
+            parent_path: Some("/Other".into()),
+            name: "B.txt".into(),
+            item_type: ItemType::File,
+            size: Some(1),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+
+    let items = store.list_items_by_prefix("/100%Done").await.unwrap();
+    assert_eq!(items.len(), 1, "percent must not match as wildcard");
+    assert_eq!(items[0].path, "/100%Done/A.txt");
+}

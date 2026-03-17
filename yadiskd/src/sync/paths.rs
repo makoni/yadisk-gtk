@@ -30,6 +30,18 @@ pub fn cache_path_for(cache_root: &Path, remote_path: &str) -> Result<PathBuf, P
     Ok(out)
 }
 
+pub fn is_ignored_temporary_name(name: &str) -> bool {
+    name.starts_with(".goutputstream-")
+        || name.starts_with(".~lock.") && name.ends_with('#')
+        || name.starts_with(".#")
+        || name.starts_with("~$")
+        || name.starts_with(".nfs")
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+        || name.ends_with(".swx")
+        || name.ends_with('~')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

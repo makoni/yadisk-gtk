@@ -410,7 +410,7 @@ impl SyncDbusService {
             let conflicts = engine.list_conflicts().await.map_err(map_engine_error)?;
             return Ok(conflicts
                 .into_iter()
-                .map(|c| (c.id as u64, c.path, c.renamed_local))
+                .map(|c| (u64::try_from(c.id).unwrap_or(0), c.path, c.renamed_local))
                 .collect());
         }
         let conflicts = self.conflicts.read().await;

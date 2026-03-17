@@ -448,9 +448,10 @@ impl DaemonRuntime {
                         if conflict.id <= last_conflict_id {
                             continue;
                         }
+                        let id = u64::try_from(conflict.id).unwrap_or(0);
                         let _ = SyncDbusService::conflict_added(
                             &signal_emitter,
-                            conflict.id as u64,
+                            id,
                             &conflict.path,
                             &conflict.renamed_local,
                         )

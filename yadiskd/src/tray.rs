@@ -96,10 +96,11 @@ fn status_icon_dir() -> anyhow::Result<PathBuf> {
 fn read_bool_env(name: &str, default: bool) -> bool {
     std::env::var(name)
         .ok()
-        .map(|value| match value.as_str() {
-            "1" | "true" | "TRUE" | "yes" | "on" => true,
-            "0" | "false" | "FALSE" | "no" | "off" => false,
-            _ => default,
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
         })
         .unwrap_or(default)
 }

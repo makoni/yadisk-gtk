@@ -99,17 +99,7 @@ fn map_event(root: &Path, event: Event) -> Vec<LocalEvent> {
     }
 }
 
-fn is_ignored_temporary_name(name: &str) -> bool {
-    name.starts_with(".goutputstream-")
-        || name.starts_with(".~lock.") && name.ends_with('#')
-        || name.starts_with(".#")
-        || name.starts_with("~$")
-        || name.starts_with(".nfs")
-        || name.ends_with(".swp")
-        || name.ends_with(".swo")
-        || name.ends_with(".swx")
-        || name.ends_with('~')
-}
+use super::paths::is_ignored_temporary_name;
 
 fn is_ignored_temp_path(path: &Path) -> bool {
     path.file_name()

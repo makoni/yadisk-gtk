@@ -85,12 +85,12 @@ impl IndexStore {
 
     pub async fn list_items_by_prefix(&self, prefix: &str) -> Result<Vec<ItemRecord>, IndexError> {
         let [prefix_a, prefix_b] = prefix_variants(prefix);
-        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
-        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
+        let pattern_a = like_pattern_for_prefix(&prefix_a);
+        let pattern_b = like_pattern_for_prefix(&prefix_b);
         let rows = sqlx::query(
             "SELECT id, path, parent_path, name, item_type, size, modified, hash, resource_id, last_synced_hash, last_synced_modified
              FROM items
-             WHERE path = ?1 OR path LIKE ?2 OR path = ?3 OR path LIKE ?4
+             WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\' OR path = ?3 OR path LIKE ?4 ESCAPE '\\'
              ORDER BY path ASC",
         )
         .bind(prefix_a)
@@ -198,13 +198,13 @@ impl IndexStore {
         prefix: &str,
     ) -> Result<Vec<(String, FileState)>, IndexError> {
         let [prefix_a, prefix_b] = prefix_variants(prefix);
-        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
-        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
+        let pattern_a = like_pattern_for_prefix(&prefix_a);
+        let pattern_b = like_pattern_for_prefix(&prefix_b);
         let rows = sqlx::query(
             "SELECT i.path, s.state
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4
+             WHERE i.path = ?1 OR i.path LIKE ?2 ESCAPE '\\' OR i.path = ?3 OR i.path LIKE ?4 ESCAPE '\\'
              ORDER BY i.path ASC",
         )
         .bind(prefix_a)
@@ -228,13 +228,13 @@ impl IndexStore {
         prefix: &str,
     ) -> Result<Vec<(String, FileState, bool)>, IndexError> {
         let [prefix_a, prefix_b] = prefix_variants(prefix);
-        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
-        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
+        let pattern_a = like_pattern_for_prefix(&prefix_a);
+        let pattern_b = like_pattern_for_prefix(&prefix_b);
         let rows = sqlx::query(
             "SELECT i.path, s.state, s.pinned
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4
+             WHERE i.path = ?1 OR i.path LIKE ?2 ESCAPE '\\' OR i.path = ?3 OR i.path LIKE ?4 ESCAPE '\\'
              ORDER BY i.path ASC",
         )
         .bind(prefix_a)
@@ -259,13 +259,13 @@ impl IndexStore {
         prefix: &str,
     ) -> Result<Vec<String>, IndexError> {
         let [prefix_a, prefix_b] = prefix_variants(prefix);
-        let pattern_a = format!("{}/%", prefix_a.trim_end_matches('/'));
-        let pattern_b = format!("{}/%", prefix_b.trim_end_matches('/'));
+        let pattern_a = like_pattern_for_prefix(&prefix_a);
+        let pattern_b = like_pattern_for_prefix(&prefix_b);
         let rows = sqlx::query(
             "SELECT i.path
              FROM states s
              JOIN items i ON i.id = s.item_id
-             WHERE (i.path = ?1 OR i.path LIKE ?2 OR i.path = ?3 OR i.path LIKE ?4)
+             WHERE (i.path = ?1 OR i.path LIKE ?2 ESCAPE '\\' OR i.path = ?3 OR i.path LIKE ?4 ESCAPE '\\')
                 AND s.pinned = 1
                 AND s.state = 'cloud_only'
              ORDER BY i.path ASC",

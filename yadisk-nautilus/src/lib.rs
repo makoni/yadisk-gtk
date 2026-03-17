@@ -19,11 +19,15 @@ pub enum SyncUiState {
 impl SyncUiState {
     pub fn from_dbus(value: &str) -> Self {
         match value {
+            "cloud_only" => Self::CloudOnly,
             "cached" => Self::Cached,
             "partial" => Self::Partial,
             "syncing" => Self::Syncing,
             "error" => Self::Error,
-            _ => Self::CloudOnly,
+            other => {
+                eprintln!("[yadisk-nautilus] unknown sync state from D-Bus: {other:?}, defaulting to CloudOnly");
+                Self::CloudOnly
+            }
         }
     }
 

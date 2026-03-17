@@ -131,6 +131,18 @@ fn parse_operation_kind(value: &str) -> Result<OperationKind, IndexError> {
     }
 }
 
+fn escape_like(segment: &str) -> String {
+    segment
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn like_pattern_for_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_end_matches('/');
+    format!("{}/%", escape_like(trimmed))
+}
+
 fn prefix_variants(prefix: &str) -> [String; 2] {
     if let Some(rest) = prefix.strip_prefix("disk:/") {
         let suffix = rest.trim_start_matches('/');
