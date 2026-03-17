@@ -425,3 +425,42 @@ async fn api_error_classification_treats_insufficient_storage_as_permanent() {
     assert_eq!(err.classification(), Some(ApiErrorClass::Permanent));
     assert!(!err.is_retryable());
 }
+
+#[tokio::test]
+async fn get_operation_status_rejects_mismatched_host() {
+    let server = MockServer::start().await;
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let err = client
+        .get_operation_status("https://evil.example.com/v1/disk/operations/1")
+        .await
+        .expect_err("expected host mismatch error");
+    match err {
+        yadisk_core::YadiskError::Api { body, .. } => {
+            assert!(
+                body.contains("host mismatch"),
+                "error should mention host mismatch: {body}"
+            );
+        }
+        other => panic!("expected Api error, got: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn get_operation_status_allows_same_host() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/operations/42"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "in-progress"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let status = client
+        .get_operation_status(&format!("{}/v1/disk/operations/42", server.uri()))
+        .await
+        .unwrap();
+    assert_eq!(status, OperationStatus::InProgress);
+}

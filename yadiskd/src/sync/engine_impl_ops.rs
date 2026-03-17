@@ -66,7 +66,12 @@ impl SyncEngine {
         self.unregister_transfer_token(path);
         match transfer_result {
             Ok(()) => {}
-            Err(TransferError::Cancelled) => return Ok(()),
+            Err(TransferError::Cancelled) => {
+                self.index
+                    .set_state(item.id, FileState::CloudOnly, true, None)
+                    .await?;
+                return Ok(());
+            }
             Err(err) => return Err(err.into()),
         }
 
@@ -287,7 +292,12 @@ impl SyncEngine {
         self.unregister_transfer_token(path);
         match transfer_result {
             Ok(()) => {}
-            Err(TransferError::Cancelled) => return Ok(()),
+            Err(TransferError::Cancelled) => {
+                self.index
+                    .set_state(item.id, FileState::Cached, true, None)
+                    .await?;
+                return Ok(());
+            }
             Err(TransferError::Request(err))
                 if matches!(
                     err.status(),

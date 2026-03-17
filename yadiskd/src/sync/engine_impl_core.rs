@@ -123,7 +123,10 @@ impl SyncEngine {
         }
 
         for old in &local_items {
-            if remote_paths.contains(&old.path) {
+            if path_variants(&old.path)
+                .iter()
+                .any(|v| remote_paths.contains(v))
+            {
                 continue;
             }
             if let Some(resource_id) = &old.resource_id
@@ -337,6 +340,8 @@ impl SyncEngine {
     }
 
     pub async fn evict_path(&self, path: &str) -> Result<(), EngineError> {
+        self.index.delete_ops_for_path(path).await?;
+        self.cancel_transfer(path);
         let item = self
             .index
             .get_item_by_path(path)

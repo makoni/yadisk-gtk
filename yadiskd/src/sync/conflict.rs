@@ -52,6 +52,8 @@ pub fn resolve_conflict(
 }
 
 fn conflict_path(path: &str, stamp: i64) -> String {
+    use rand::Rng;
+    let suffix: u16 = rand::thread_rng().r#gen();
     let (dir, name) = match path.rsplit_once('/') {
         Some((dir, name)) => (format!("{dir}/"), name),
         None => (String::new(), path),
@@ -60,10 +62,10 @@ fn conflict_path(path: &str, stamp: i64) -> String {
     if let Some((stem, ext)) = name.rsplit_once('.')
         && !stem.is_empty()
     {
-        return format!("{dir}{stem} (conflict {stamp}).{ext}");
+        return format!("{dir}{stem} (conflict {stamp}-{suffix:04x}).{ext}");
     }
 
-    format!("{dir}{name} (conflict {stamp})")
+    format!("{dir}{name} (conflict {stamp}-{suffix:04x})")
 }
 
 #[cfg(test)]
@@ -116,12 +118,16 @@ mod tests {
         let local = meta("b", 2);
         let remote = meta("c", 3);
         let decision = resolve_conflict("/Docs/A.txt", Some(&base), &local, &remote);
-        assert_eq!(
-            decision,
-            ConflictDecision::KeepBoth {
-                renamed_local: "/Docs/A (conflict 2).txt".to_string()
+        match &decision {
+            ConflictDecision::KeepBoth { renamed_local } => {
+                assert!(
+                    renamed_local.starts_with("/Docs/A (conflict 2-"),
+                    "unexpected renamed path: {renamed_local}"
+                );
+                assert!(renamed_local.ends_with(").txt"));
             }
-        );
+            other => panic!("expected KeepBoth, got {other:?}"),
+        }
     }
 
     #[test]
@@ -129,11 +135,31 @@ mod tests {
         let local = meta("b", 2);
         let remote = meta("c", 3);
         let decision = resolve_conflict("/Docs/A.txt", None, &local, &remote);
-        assert_eq!(
-            decision,
-            ConflictDecision::KeepBoth {
-                renamed_local: "/Docs/A (conflict 2).txt".to_string()
+        match &decision {
+            ConflictDecision::KeepBoth { renamed_local } => {
+                assert!(
+                    renamed_local.starts_with("/Docs/A (conflict 2-"),
+                    "unexpected renamed path: {renamed_local}"
+                );
+                assert!(renamed_local.ends_with(").txt"));
             }
-        );
+            other => panic!("expected KeepBoth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conflict_paths_are_unique_for_same_timestamp() {
+        let path1 = conflict_path("/Docs/A.txt", 100);
+        let path2 = conflict_path("/Docs/A.txt", 100);
+        assert_ne!(path1, path2, "two conflict paths with same timestamp must differ");
+        assert!(path1.starts_with("/Docs/A (conflict 100-"));
+        assert!(path2.starts_with("/Docs/A (conflict 100-"));
+    }
+
+    #[test]
+    fn conflict_path_without_extension() {
+        let path = conflict_path("/Docs/README", 42);
+        assert!(path.starts_with("/Docs/README (conflict 42-"));
+        assert!(!path.contains('.'));
     }
 }

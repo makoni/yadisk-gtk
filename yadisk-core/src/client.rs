@@ -168,6 +168,17 @@ impl YadiskClient {
         operation_url: &str,
     ) -> Result<OperationStatus, YadiskError> {
         let url = Url::parse(operation_url)?;
+        if url.host() != self.base_url.host() {
+            return Err(YadiskError::Api {
+                status: StatusCode::BAD_REQUEST,
+                body: format!(
+                    "operation URL host mismatch: expected {:?}, got {:?}",
+                    self.base_url.host_str(),
+                    url.host_str()
+                ),
+                retry_after: None,
+            });
+        }
         let response = self
             .http
             .get(url)

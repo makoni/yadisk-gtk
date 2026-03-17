@@ -73,20 +73,16 @@ impl PortalTokenStore {
         payload.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
         payload.extend_from_slice(&ciphertext);
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&self.cipher_path)?;
-        file.write_all(&payload)?;
-        file.sync_all()?;
-        drop(file);
-
+        let mut opts = OpenOptions::new();
+        opts.create(true).truncate(true).write(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&self.cipher_path, fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
+        let mut file = opts.open(&self.cipher_path)?;
+        file.write_all(&payload)?;
+        file.sync_all()?;
 
         Ok(())
     }
@@ -199,5 +195,25 @@ mod tests {
         assert!(store.has_token());
         store.delete_token().unwrap();
         assert!(!store.has_token());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_token_creates_file_with_restricted_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cipher_path = temp_dir.path().join("token_perms.bin");
+        let secret = vec![99u8; 32];
+        let store = PortalTokenStore::with_secret_for_tests(&secret, cipher_path.clone())
+            .expect("failed to create test store");
+
+        store.save_token("secret-token").unwrap();
+        let meta = fs::metadata(&cipher_path).unwrap();
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "token file should have 0600 permissions, got {mode:o}"
+        );
     }
 }

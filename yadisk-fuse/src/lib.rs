@@ -95,9 +95,13 @@ impl YadiskFuseBridge {
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), FuseBridgeError> {
-        let payload = format!(
-            "{{\"from\":\"{from}\",\"path\":\"{to}\",\"overwrite\":true,\"action\":\"move\"}}"
-        );
+        let payload = serde_json::json!({
+            "from": from,
+            "path": to,
+            "overwrite": true,
+            "action": "move"
+        })
+        .to_string();
         self.index
             .enqueue_op(&Operation {
                 kind: OperationKind::Move,
@@ -186,6 +190,27 @@ mod tests {
         assert_eq!(dirents, vec!["Sub".to_string()]);
         let attr = bridge.getattr("/Docs").await.unwrap();
         assert!(attr.is_some());
+    }
+
+    #[tokio::test]
+    async fn rename_produces_valid_json_with_special_characters() {
+        let bridge = make_bridge().await;
+        bridge.mkdir("/Docs").await.unwrap();
+        let _ = bridge.index.dequeue_op().await.unwrap();
+
+        bridge
+            .rename("/Docs/file \"quotes\".txt", "/Docs/new\\name.txt")
+            .await
+            .unwrap();
+
+        let op = bridge.index.dequeue_op().await.unwrap().unwrap();
+        assert_eq!(op.kind, OperationKind::Move);
+        let payload: serde_json::Value =
+            serde_json::from_str(op.payload.as_deref().unwrap()).expect("payload must be valid JSON");
+        assert_eq!(payload["from"], "/Docs/file \"quotes\".txt");
+        assert_eq!(payload["path"], "/Docs/new\\name.txt");
+        assert_eq!(payload["overwrite"], true);
+        assert_eq!(payload["action"], "move");
     }
 
     #[tokio::test]
