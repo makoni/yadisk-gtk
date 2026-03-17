@@ -498,9 +498,18 @@ impl SyncEngine {
             OperationKind::Upload => self.execute_upload(&op.path).await,
             OperationKind::Mkdir => self.execute_mkdir(&op.path).await,
             OperationKind::Delete => {
-                let link = self.client.delete_resource(&op.path, true).await?;
-                if let Some(link) = link {
-                    self.wait_for_operation(link.href.as_str()).await?;
+                match self.client.delete_resource(&op.path, true).await {
+                    Ok(link) => {
+                        if let Some(link) = link {
+                            self.wait_for_operation(link.href.as_str()).await?;
+                        }
+                    }
+                    Err(yadisk_core::YadiskError::Api { status, .. })
+                        if status == reqwest::StatusCode::NOT_FOUND =>
+                    {
+                        // Resource already deleted on remote — treat as success
+                    }
+                    Err(err) => return Err(err.into()),
                 }
                 self.index.delete_item_by_path(&op.path).await?;
                 Ok(())

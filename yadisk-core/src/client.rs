@@ -103,7 +103,7 @@ impl YadiskClient {
         from: &str,
         path: &str,
         overwrite: bool,
-    ) -> Result<TransferLink, YadiskError> {
+    ) -> Result<Option<TransferLink>, YadiskError> {
         let mut url = self.endpoint("/v1/disk/resources/move")?;
         url.query_pairs_mut()
             .append_pair("from", from)
@@ -115,7 +115,10 @@ impl YadiskClient {
             .header("Authorization", self.auth_header_value())
             .send()
             .await?;
-        Self::handle_response(response).await
+        if response.status() == StatusCode::CREATED {
+            return Ok(None);
+        }
+        Ok(Some(Self::handle_response(response).await?))
     }
 
     pub async fn copy_resource(
@@ -123,7 +126,7 @@ impl YadiskClient {
         from: &str,
         path: &str,
         overwrite: bool,
-    ) -> Result<TransferLink, YadiskError> {
+    ) -> Result<Option<TransferLink>, YadiskError> {
         let mut url = self.endpoint("/v1/disk/resources/copy")?;
         url.query_pairs_mut()
             .append_pair("from", from)
@@ -135,7 +138,10 @@ impl YadiskClient {
             .header("Authorization", self.auth_header_value())
             .send()
             .await?;
-        Self::handle_response(response).await
+        if response.status() == StatusCode::CREATED {
+            return Ok(None);
+        }
+        Ok(Some(Self::handle_response(response).await?))
     }
 
     pub async fn delete_resource(
@@ -243,6 +249,9 @@ impl YadiskClient {
             let page = self
                 .list_directory_with_fields(path, Some(page_size), Some(offset), fields)
                 .await?;
+            if page.items.is_empty() {
+                break;
+            }
             offset = offset.saturating_add(page.items.len() as u32);
             let total = page.total;
             items.extend(page.items);

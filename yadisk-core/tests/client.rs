@@ -193,7 +193,8 @@ async fn move_resource_returns_operation_link() {
     let link = client
         .move_resource("/Docs/A.txt", "/Docs/B.txt", true)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("expected operation link for 202");
 
     assert_eq!(
         link.href.as_str(),
@@ -223,7 +224,8 @@ async fn copy_resource_returns_operation_link() {
     let link = client
         .copy_resource("/Docs/A.txt", "/Docs/C.txt", false)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("expected operation link for 202");
 
     assert_eq!(
         link.href.as_str(),
@@ -463,4 +465,82 @@ async fn get_operation_status_allows_same_host() {
         .await
         .unwrap();
     assert_eq!(status, OperationStatus::InProgress);
+}
+
+#[tokio::test]
+async fn list_directory_all_breaks_on_empty_page() {
+    let server = MockServer::start().await;
+
+    // Server returns total=5 but an empty items list — must not loop forever
+    Mock::given(method("GET"))
+        .and(path("/v1/disk/resources"))
+        .and(query_param("path", "/Empty"))
+        .and(query_param("limit", "10"))
+        .and(query_param("offset", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "_embedded": {
+                "limit": 10,
+                "offset": 0,
+                "total": 5,
+                "items": []
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let items = client.list_directory_all("/Empty", 10, None).await.unwrap();
+    assert!(items.is_empty(), "should return empty vec when server returns no items");
+}
+
+#[tokio::test]
+async fn move_resource_returns_none_on_201() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/disk/resources/move"))
+        .and(query_param("from", "/Docs/A.txt"))
+        .and(query_param("path", "/Docs/B.txt"))
+        .and(query_param("overwrite", "true"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "path": "/Docs/B.txt",
+            "name": "B.txt",
+            "type": "file",
+            "size": 10
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let link = client
+        .move_resource("/Docs/A.txt", "/Docs/B.txt", true)
+        .await
+        .unwrap();
+    assert!(link.is_none(), "201 response should return None (immediate completion)");
+}
+
+#[tokio::test]
+async fn copy_resource_returns_none_on_201() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("PUT"))
+        .and(path("/v1/disk/resources/copy"))
+        .and(query_param("from", "/Docs/A.txt"))
+        .and(query_param("path", "/Docs/C.txt"))
+        .and(query_param("overwrite", "false"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "path": "/Docs/C.txt",
+            "name": "C.txt",
+            "type": "file",
+            "size": 10
+        })))
+        .mount(&server)
+        .await;
+
+    let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
+    let link = client
+        .copy_resource("/Docs/A.txt", "/Docs/C.txt", false)
+        .await
+        .unwrap();
+    assert!(link.is_none(), "201 response should return None (immediate completion)");
 }

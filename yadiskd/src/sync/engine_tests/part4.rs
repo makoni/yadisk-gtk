@@ -213,3 +213,62 @@
             "item should not be deleted when remote has matching path variant"
         );
     }
+
+    #[tokio::test]
+    async fn delete_op_treats_404_as_success() {
+        let server = MockServer::start().await;
+        // Remote returns 404 — resource already deleted
+        Mock::given(method("DELETE"))
+            .and(path("/v1/disk/resources"))
+            .and(query_param("path", "/Docs/Gone.txt"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Resource not found",
+                "error": "DiskNotFoundError"
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+
+        // Create an item in the index
+        let item = engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/Gone.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "Gone.txt".into(),
+                item_type: ItemType::File,
+                size: Some(5),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        engine
+            .index
+            .set_state(item.id, FileState::Syncing, true, None)
+            .await
+            .unwrap();
+
+        // Enqueue a delete operation
+        engine.enqueue_delete("/Docs/Gone.txt").await.unwrap();
+
+        // run_once should succeed (404 treated as success)
+        let processed = engine.run_once().await.unwrap();
+        assert!(processed, "delete operation should have been processed");
+
+        // The item should be removed from the index
+        let after = engine
+            .index
+            .get_item_by_path("/Docs/Gone.txt")
+            .await
+            .unwrap();
+        assert!(
+            after.is_none(),
+            "item should be deleted from index after 404 delete"
+        );
+    }

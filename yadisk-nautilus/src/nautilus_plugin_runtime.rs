@@ -85,15 +85,26 @@
     }
 
     fn start_signal_thread_once() {
-        START_SIGNAL_THREAD.call_once(|| {
-            let Some(client) = dbus_client().cloned() else {
-                return;
-            };
-            SIGNAL_THREAD_STARTED.store(true, Ordering::SeqCst);
+        if SIGNAL_THREAD_STARTED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
 
-            thread::spawn(move || {
+        thread::spawn(move || {
+            loop {
+                let client = match SyncDbusClient::connect_session() {
+                    Ok(c) => Arc::new(c),
+                    Err(_) => {
+                        thread::sleep(std::time::Duration::from_secs(5));
+                        continue;
+                    }
+                };
+
                 let Ok(mut listener) = client.subscribe_signals() else {
-                    return;
+                    thread::sleep(std::time::Duration::from_secs(5));
+                    continue;
                 };
 
                 while let Ok(Some(event)) = listener.next_event() {
@@ -112,6 +123,9 @@
                         SyncSignalEvent::ConflictAdded { .. } => {}
                     }
                 }
-            });
+
+                eprintln!("[yadisk-nautilus] signal listener disconnected, reconnecting...");
+                thread::sleep(std::time::Duration::from_secs(2));
+            }
         });
     }

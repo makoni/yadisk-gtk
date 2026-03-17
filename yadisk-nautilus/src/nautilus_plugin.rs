@@ -5,7 +5,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, Once, OnceLock, RwLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use std::thread;
 
 use glib_sys::{GList, GType, g_free, g_list_append, gpointer};
@@ -116,7 +116,6 @@ static CLIENT: OnceLock<Option<Arc<SyncDbusClient>>> = OnceLock::new();
 static SYNC_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static STATE_CACHE: OnceLock<RwLock<HashMap<String, SyncUiState>>> = OnceLock::new();
 static ACTION_CONTEXTS: OnceLock<Mutex<HashMap<usize, ActionContext>>> = OnceLock::new();
-static START_SIGNAL_THREAD: Once = Once::new();
 static SIGNAL_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
 static REGISTERED_TYPE: AtomicUsize = AtomicUsize::new(0);
 static REGISTERED_TYPES: OnceLock<[GType; 1]> = OnceLock::new();

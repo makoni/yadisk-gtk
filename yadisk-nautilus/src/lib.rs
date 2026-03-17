@@ -368,14 +368,18 @@ pub struct SignalListener {
 
 impl SignalListener {
     pub fn next_event(&mut self) -> Result<Option<SyncSignalEvent>, ExtensionError> {
-        let Some(message) = self.iter.next() else {
-            return Ok(None);
-        };
-        parse_signal_event(&message).map(Some)
+        loop {
+            let Some(message) = self.iter.next() else {
+                return Ok(None);
+            };
+            if let Some(event) = parse_signal_event(&message)? {
+                return Ok(Some(event));
+            }
+        }
     }
 }
 
-fn parse_signal_event(message: &Message) -> Result<SyncSignalEvent, ExtensionError> {
+fn parse_signal_event(message: &Message) -> Result<Option<SyncSignalEvent>, ExtensionError> {
     let member = message
         .header()
         .member()
@@ -385,20 +389,20 @@ fn parse_signal_event(message: &Message) -> Result<SyncSignalEvent, ExtensionErr
     match member.as_str() {
         "StateChanged" => {
             let (path, state): (String, String) = message.body().deserialize()?;
-            Ok(SyncSignalEvent::StateChanged {
+            Ok(Some(SyncSignalEvent::StateChanged {
                 path,
                 state: SyncUiState::from_dbus(&state),
-            })
+            }))
         }
         "ConflictAdded" => {
             let (id, path, renamed_local): (u64, String, String) = message.body().deserialize()?;
-            Ok(SyncSignalEvent::ConflictAdded {
+            Ok(Some(SyncSignalEvent::ConflictAdded {
                 id,
                 path,
                 renamed_local,
-            })
+            }))
         }
-        other => Err(ExtensionError::UnsupportedSignal(other.to_string())),
+        _ => Ok(None),
     }
 }
 

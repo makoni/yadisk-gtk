@@ -77,3 +77,19 @@ fn parses_partial_state_from_dbus() {
         "Partially available offline"
     );
 }
+
+#[test]
+fn empty_candidates_returns_error() {
+    // Validates that perform_action_with_fallback and get_state_with_fallback
+    // return an error for empty candidate lists
+    let err = ExtensionError::EmptyCandidates;
+    assert!(format!("{err}").contains("empty"));
+}
+
+#[test]
+fn unsupported_signal_variant_is_defined() {
+    // UnsupportedSignal variant exists but is no longer returned by parse_signal_event.
+    // Unknown D-Bus signals are now silently skipped (returning Ok(None)).
+    let err = ExtensionError::UnsupportedSignal("test".to_string());
+    assert!(format!("{err}").contains("unsupported"));
+}

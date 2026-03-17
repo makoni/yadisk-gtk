@@ -418,7 +418,9 @@ impl SyncEngine {
                 .move_resource(&payload.from, &payload.path, payload.overwrite)
                 .await?
         };
-        self.wait_for_operation(link.href.as_str()).await?;
+        if let Some(link) = link {
+            self.wait_for_operation(link.href.as_str()).await?;
+        }
 
         if let Some(source) = source_item {
             let mut input = ItemInput {

@@ -336,3 +336,88 @@ async fn init_upgrades_legacy_schema() {
     assert_eq!(op.priority, 2);
     assert_eq!(op.payload.as_deref(), Some("{\"v\":2}"));
 }
+
+#[tokio::test]
+async fn delete_item_cascades_to_states() {
+    let store = make_store().await;
+    let item = store
+        .upsert_item(&ItemInput {
+            path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
+            name: "A.txt".into(),
+            item_type: ItemType::File,
+            size: Some(12),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+    store
+        .set_state(item.id, FileState::Cached, true, None)
+        .await
+        .unwrap();
+    assert!(store.get_state(item.id).await.unwrap().is_some());
+
+    store.delete_item_by_path("/Docs/A.txt").await.unwrap();
+
+    // With foreign_keys ON, the state row should be cascade-deleted
+    let state = store.get_state(item.id).await.unwrap();
+    assert!(
+        state.is_none(),
+        "state row should be cascade-deleted when item is deleted"
+    );
+}
+
+#[tokio::test]
+async fn requeue_op_last_error_at_is_current_time_not_retry_at() {
+    let store = make_store().await;
+    let item = store
+        .upsert_item(&ItemInput {
+            path: "/Docs/B.txt".into(),
+            parent_path: Some("/Docs".into()),
+            name: "B.txt".into(),
+            item_type: ItemType::File,
+            size: Some(1),
+            modified: None,
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+    store
+        .set_state(item.id, FileState::Syncing, true, None)
+        .await
+        .unwrap();
+
+    let op = Operation {
+        kind: OperationKind::Download,
+        path: "/Docs/B.txt".into(),
+        payload: None,
+        attempt: 0,
+        retry_at: None,
+        priority: 0,
+    };
+    let far_future = 9_999_999_999i64;
+    store
+        .requeue_op(&op, far_future, Some("timeout"))
+        .await
+        .unwrap();
+
+    let state = store.get_state(item.id).await.unwrap().unwrap();
+    assert_eq!(state.retry_at, Some(far_future));
+    // last_error_at must be the current time, NOT the far-future retry_at
+    assert_ne!(
+        state.last_error_at,
+        Some(far_future),
+        "last_error_at should be current time, not the future retry_at"
+    );
+    assert!(
+        state.last_error_at.unwrap() < far_future,
+        "last_error_at should be in the past (current time), not in the future"
+    );
+}

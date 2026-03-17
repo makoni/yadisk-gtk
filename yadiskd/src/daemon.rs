@@ -86,7 +86,7 @@ impl DaemonConfig {
 pub struct DaemonRuntime {
     config: DaemonConfig,
     engine: Arc<SyncEngine>,
-    auth_ready: bool,
+    auth_ready: Arc<AtomicBool>,
 }
 
 impl DaemonRuntime {
@@ -99,7 +99,7 @@ impl DaemonRuntime {
             .with_context(|| format!("failed to create cache root at {:?}", config.cache_root))?;
 
         let token = resolve_valid_token(None).await?;
-        let auth_ready = !token.trim().is_empty();
+        let auth_ready = Arc::new(AtomicBool::new(!token.trim().is_empty()));
         let client = YadiskClient::new(token)?;
         let index = IndexStore::new_default()
             .await
@@ -123,7 +123,7 @@ impl DaemonRuntime {
             } else {
                 "disabled"
             },
-            if self.auth_ready {
+            if self.auth_ready.load(Ordering::SeqCst) {
                 "ready"
             } else {
                 "waiting_for_auth"
@@ -193,10 +193,10 @@ impl DaemonRuntime {
         let cloud_poll_interval = self.config.cloud_poll_interval;
         let sync_root_available_cloud = Arc::clone(&sync_root_available);
         let cloud_sync_error_cloud = Arc::clone(&cloud_sync_error);
-        let auth_ready_cloud = self.auth_ready;
+        let auth_ready_cloud = Arc::clone(&self.auth_ready);
         let cloud_handle = tokio::spawn(async move {
             loop {
-                if !auth_ready_cloud || !sync_root_available_cloud.load(Ordering::SeqCst) {
+                if !auth_ready_cloud.load(Ordering::SeqCst) || !sync_root_available_cloud.load(Ordering::SeqCst) {
                     tokio::time::sleep(cloud_poll_interval).await;
                     continue;
                 }
@@ -225,10 +225,10 @@ impl DaemonRuntime {
         let engine_for_worker = Arc::clone(&self.engine);
         let worker_interval = self.config.worker_interval;
         let sync_root_available_worker = Arc::clone(&sync_root_available);
-        let auth_ready_worker = self.auth_ready;
+        let auth_ready_worker = Arc::clone(&self.auth_ready);
         let worker_handle = tokio::spawn(async move {
             loop {
-                if !auth_ready_worker || !sync_root_available_worker.load(Ordering::SeqCst) {
+                if !auth_ready_worker.load(Ordering::SeqCst) || !sync_root_available_worker.load(Ordering::SeqCst) {
                     tokio::time::sleep(worker_interval).await;
                     continue;
                 }
@@ -251,7 +251,7 @@ impl DaemonRuntime {
         let materialize_remote_root = self.config.remote_root.clone();
         let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
         let sync_root_available_materialize = Arc::clone(&sync_root_available);
-        let auth_ready_materialize = self.auth_ready;
+        let auth_ready_materialize = Arc::clone(&self.auth_ready);
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
@@ -261,7 +261,7 @@ impl DaemonRuntime {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
-                if !auth_ready_materialize
+                if !auth_ready_materialize.load(Ordering::SeqCst)
                     || !sync_root_available_materialize.load(Ordering::SeqCst)
                 {
                     tokio::time::sleep(Duration::from_secs(1)).await;

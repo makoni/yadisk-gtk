@@ -153,14 +153,43 @@ mod app {
                     blksize: 512,
                 });
             }
-            let item = self
+            if let Some(item) = self
                 .rt
                 .block_on(self.index.get_item_by_path(&path))
                 .ok()
-                .flatten()?;
-            let mut inodes = self.inodes.lock().ok()?;
-            let ino = inodes.inode_for(&item.path);
-            Some(attr_for_item(ino, &item))
+                .flatten()
+            {
+                let mut inodes = self.inodes.lock().ok()?;
+                let ino = inodes.inode_for(&item.path);
+                return Some(attr_for_item(ino, &item));
+            }
+            // Synthetic directory: readdir may report directories synthesized from
+            // nested paths (e.g. /Docs/Sub inferred from /Docs/Sub/file.txt).
+            // Check if any children exist under this path.
+            let children = self.list_children(&path);
+            if !children.is_empty() {
+                let mut inodes = self.inodes.lock().ok()?;
+                let ino = inodes.inode_for(&path);
+                let now = SystemTime::now();
+                return Some(FileAttr {
+                    ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: now,
+                    mtime: now,
+                    ctime: now,
+                    crtime: now,
+                    kind: FileType::Directory,
+                    perm: 0o755,
+                    nlink: 2,
+                    uid: unsafe { libc::geteuid() },
+                    gid: unsafe { libc::getegid() },
+                    rdev: 0,
+                    flags: 0,
+                    blksize: 512,
+                });
+            }
+            None
         }
 
         fn list_children(&self, path: &str) -> Vec<(String, ItemType)> {

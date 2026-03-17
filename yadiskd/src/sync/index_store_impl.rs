@@ -17,7 +17,8 @@ impl IndexStore {
         }
         let options = SqliteConnectOptions::new()
             .filename(&db_path)
-            .create_if_missing(true);
+            .create_if_missing(true)
+            .pragma("foreign_keys", "ON");
         let pool = SqlitePool::connect_with(options).await?;
         let store = Self { pool };
         store.init().await?;
@@ -25,6 +26,9 @@ impl IndexStore {
     }
 
     pub async fn init(&self) -> Result<(), IndexError> {
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&self.pool)
+            .await?;
         MIGRATOR.run(&self.pool).await?;
         Ok(())
     }
@@ -354,6 +358,10 @@ impl IndexStore {
         retry_at: i64,
         last_error: Option<&str>,
     ) -> Result<(), IndexError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let mut op = op.clone();
         op.attempt = op.attempt.saturating_add(1);
         op.retry_at = Some(retry_at);
@@ -367,7 +375,7 @@ impl IndexStore {
                 StateMeta {
                     retry_at: Some(retry_at),
                     last_success_at: None,
-                    last_error_at: Some(retry_at),
+                    last_error_at: Some(now),
                     dirty: true,
                 },
             )
