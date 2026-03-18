@@ -9,8 +9,8 @@ mod app {
     use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use fuser::{
         FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory,
@@ -29,18 +29,22 @@ mod app {
         next: u64,
         path_to_ino: HashMap<String, u64>,
         ino_to_path: HashMap<u64, String>,
+        refcounts: HashMap<u64, u64>,
     }
 
     impl InodeMap {
         fn new() -> Self {
             let mut path_to_ino = HashMap::new();
             let mut ino_to_path = HashMap::new();
+            let mut refcounts = HashMap::new();
             path_to_ino.insert("/".to_string(), 1);
             ino_to_path.insert(1, "/".to_string());
+            refcounts.insert(1, u64::MAX); // root inode is never forgotten
             Self {
                 next: 2,
                 path_to_ino,
                 ino_to_path,
+                refcounts,
             }
         }
 
@@ -53,6 +57,24 @@ mod app {
             self.path_to_ino.insert(path.to_string(), ino);
             self.ino_to_path.insert(ino, path.to_string());
             ino
+        }
+
+        fn inc_ref(&mut self, ino: u64) {
+            *self.refcounts.entry(ino).or_insert(0) += 1;
+        }
+
+        fn forget(&mut self, ino: u64, nlookup: u64) {
+            if ino == 1 {
+                return; // never forget root
+            }
+            let count = self.refcounts.entry(ino).or_insert(0);
+            *count = count.saturating_sub(nlookup);
+            if *count == 0 {
+                self.refcounts.remove(&ino);
+                if let Some(path) = self.ino_to_path.remove(&ino) {
+                    self.path_to_ino.remove(&path);
+                }
+            }
         }
 
         fn path_for(&self, ino: u64) -> Option<String> {
@@ -89,16 +111,48 @@ mod app {
         cache_root: PathBuf,
         inodes: Mutex<InodeMap>,
         downloader: DbusDownloader,
+        state_notify: Arc<(Mutex<()>, Condvar)>,
     }
 
     impl YadiskFuseFs {
         fn new(rt: Runtime, index: IndexStore, cache_root: PathBuf) -> Self {
+            let state_notify = Arc::new((Mutex::new(()), Condvar::new()));
+
+            // Background thread: listen for D-Bus state_changed signals and
+            // wake any FUSE threads waiting in ensure_downloaded.
+            let notify = Arc::clone(&state_notify);
+            std::thread::spawn(move || loop {
+                let Ok(connection) = Connection::session() else {
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                };
+                let Ok(proxy) = Proxy::new(
+                    &connection,
+                    DBUS_NAME_SYNC,
+                    DBUS_OBJECT_PATH_SYNC,
+                    DBUS_INTERFACE_SYNC,
+                ) else {
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                };
+                let Ok(signals) = proxy.receive_signal("state_changed") else {
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                };
+                for _signal in signals {
+                    notify.1.notify_all();
+                }
+                // Iterator ended (D-Bus disconnected) — reconnect after a short pause.
+                std::thread::sleep(Duration::from_secs(1));
+            });
+
             Self {
                 rt,
                 index: Arc::new(index),
                 cache_root,
                 inodes: Mutex::new(InodeMap::new()),
                 downloader: DbusDownloader::new(),
+                state_notify,
             }
         }
 
@@ -242,7 +296,9 @@ mod app {
             }
             eprintln!("[yadisk-fuse] on-demand download requested: {remote}");
             let _ = self.downloader.download(&remote);
-            for _ in 0..150 {
+            let (lock, cvar) = &*self.state_notify;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
                 state = self.current_state_for_remote_path(&remote);
                 let cache_exists = std::fs::metadata(&cache_path).is_ok();
                 if matches!(state, Some(FileState::Cached)) && cache_exists {
@@ -253,7 +309,13 @@ mod app {
                     eprintln!("[yadisk-fuse] on-demand download failed: {remote}");
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(200));
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                // Wait for a state_changed D-Bus signal or poll every 1s as fallback.
+                let guard = lock.lock().unwrap();
+                let _ = cvar.wait_timeout(guard, remaining.min(Duration::from_secs(1)));
             }
             eprintln!("[yadisk-fuse] on-demand download timeout: {remote}");
         }
@@ -299,9 +361,18 @@ mod app {
             };
             let path = Self::child_path(&parent_path, name);
             if let Some(attr) = self.item_attr(&path) {
+                if let Ok(mut inodes) = self.inodes.lock() {
+                    inodes.inc_ref(attr.ino);
+                }
                 reply.entry(&TTL, &attr, 0);
             } else {
                 reply.error(ENOENT);
+            }
+        }
+
+        fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
+            if let Ok(mut inodes) = self.inodes.lock() {
+                inodes.forget(ino, nlookup);
             }
         }
 

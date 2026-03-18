@@ -42,8 +42,13 @@ impl YadiskClient {
     }
 
     pub fn with_base_url(base_url: &str, token: impl Into<String>) -> Result<Self, YadiskError> {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(reqwest::Error::from)?;
         Ok(Self {
-            http: Client::new(),
+            http,
             base_url: Url::parse(base_url)?,
             token: token.into(),
         })
@@ -297,7 +302,12 @@ impl YadiskClient {
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, YadiskError> {
-        Ok(self.base_url.join(path)?)
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        let relative = path.strip_prefix('/').unwrap_or(path);
+        Ok(base.join(relative)?)
     }
 
     async fn handle_response<T: serde::de::DeserializeOwned>(
@@ -308,7 +318,10 @@ impl YadiskClient {
         } else {
             let status = response.status();
             let retry_after = parse_retry_after_seconds(response.headers());
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(text) => text,
+                Err(err) => format!("<failed to read response body: {err}>"),
+            };
             Err(YadiskError::Api {
                 status,
                 body,
@@ -376,13 +389,21 @@ pub struct DiskInfo {
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    headers
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()
+    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
+    // Try integer seconds first (most common)
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(secs);
+    }
+    // Try HTTP-date format per RFC 9110 section 10.2.3
+    if let Ok(date) = httpdate::parse_http_date(value) {
+        let now = std::time::SystemTime::now();
+        if let Ok(duration) = date.duration_since(now) {
+            return Some(duration.as_secs().max(1));
+        }
+        // Date is in the past — retry immediately
+        return Some(0);
+    }
+    None
 }
 
 #[derive(Debug, Deserialize, Serialize)]

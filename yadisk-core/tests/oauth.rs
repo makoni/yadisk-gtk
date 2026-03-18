@@ -87,3 +87,22 @@ async fn refresh_token_posts_form_data() {
     assert_eq!(token.access_token, "new-token");
     assert_eq!(token.refresh_token.as_deref(), Some("refresh-2"));
 }
+
+#[test]
+fn oauth_token_debug_redacts_credentials() {
+    let token = yadisk_core::OAuthToken {
+        access_token: "super-secret-access-token".to_string(),
+        token_type: "bearer".to_string(),
+        expires_in: Some(3600),
+        refresh_token: Some("super-secret-refresh-token".to_string()),
+        scope: Some("disk:read".to_string()),
+    };
+    let debug_output = format!("{token:?}");
+    assert!(
+        !debug_output.contains("super-secret"),
+        "Debug output must not contain actual tokens"
+    );
+    assert!(debug_output.contains("REDACTED"));
+    assert!(debug_output.contains("bearer"));
+    assert!(debug_output.contains("disk:read"));
+}

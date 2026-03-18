@@ -9,6 +9,12 @@ impl SyncEngine {
         if item.item_type == ItemType::Dir {
             self.ensure_cache_dir_for_remote(path).await?;
             let descendants = self.index.list_items_by_prefix(path).await?;
+            let states: HashMap<String, FileState> = self
+                .index
+                .list_states_by_prefix(path)
+                .await?
+                .into_iter()
+                .collect();
             for descendant in descendants {
                 if descendant.item_type == ItemType::Dir {
                     self.ensure_cache_dir_for_remote(&descendant.path).await?;
@@ -29,16 +35,12 @@ impl SyncEngine {
                     continue;
                 }
 
-                let state = self.index.get_state(descendant.id).await?;
-                let current_state = state
-                    .as_ref()
-                    .map(|row| row.state.clone())
+                let current_state = state_for_path_variant(&states, &descendant.path)
                     .unwrap_or(FileState::CloudOnly);
-                let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
                 let should_enqueue =
                     !matches!(&current_state, FileState::Cached | FileState::Syncing);
                 self.index
-                    .set_state(descendant.id, current_state, true, last_error)
+                    .set_state(descendant.id, current_state, true, None)
                     .await?;
                 if should_enqueue {
                     self.enqueue_download(&descendant.path).await?;
@@ -310,6 +312,24 @@ impl SyncEngine {
             }
             Err(err) => return Err(err.into()),
         }
+
+        // Post-upload integrity check: verify the server received the complete file
+        if let Ok(remote) = self
+            .client
+            .get_resource_with_fields(path, Some(&["md5"]))
+            .await
+        {
+            if let Some(remote_md5) = &remote.md5 {
+                if remote_md5.to_ascii_lowercase() != local_version.hash.to_ascii_lowercase() {
+                    return Err(TransferError::IntegrityMismatch {
+                        expected_md5: local_version.hash.clone(),
+                        actual_md5: remote_md5.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
         self.mark_item_synced(item, path, local_version).await
     }
 

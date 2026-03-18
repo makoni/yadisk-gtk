@@ -467,12 +467,29 @@ fn read_oauth_from_env_file(path: &Path) -> Result<Option<(String, String, Optio
 }
 
 fn parse_env_value(raw: &str) -> String {
-    if raw.len() >= 2 {
-        let quoted = (raw.starts_with('"') && raw.ends_with('"'))
-            || (raw.starts_with('\'') && raw.ends_with('\''));
-        if quoted {
-            return raw[1..raw.len() - 1].to_string();
+    if raw.len() >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+        let inner = &raw[1..raw.len() - 1];
+        let mut result = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some(other) => {
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(ch);
+            }
         }
+        return result;
+    }
+    if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
+        return raw[1..raw.len() - 1].to_string();
     }
     raw.split('#').next().unwrap_or_default().trim().to_string()
 }
@@ -554,6 +571,14 @@ mod tests {
         assert_eq!(parse_env_value("\"abc\""), "abc");
         assert_eq!(parse_env_value("'xyz'"), "xyz");
         assert_eq!(parse_env_value("abc # comment"), "abc");
+    }
+
+    #[test]
+    fn parse_env_value_round_trips_with_quote_env_value() {
+        let original = r#"ab"c\d"#;
+        let quoted = quote_env_value(original);
+        let parsed = parse_env_value(&quoted);
+        assert_eq!(parsed, original, "round-trip through quote/parse must preserve value");
     }
 
     #[test]

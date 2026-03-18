@@ -36,12 +36,24 @@ impl OAuthClient {
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
     ) -> Result<Self, OAuthError> {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .build()?;
         Ok(Self {
-            http: Client::new(),
+            http,
             base_url: Url::parse(base_url)?,
             client_id: client_id.into(),
             client_secret: client_secret.into(),
         })
+    }
+
+    fn endpoint(&self, path: &str) -> Result<Url, OAuthError> {
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        Ok(base.join(path)?)
     }
 
     pub fn authorize_url(
@@ -50,7 +62,7 @@ impl OAuthClient {
         scope: Option<&str>,
         state: Option<&str>,
     ) -> Result<Url, OAuthError> {
-        let mut url = self.base_url.join("/authorize")?;
+        let mut url = self.endpoint("authorize")?;
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("response_type", "code");
@@ -71,7 +83,7 @@ impl OAuthClient {
         code: &str,
         redirect_uri: Option<&str>,
     ) -> Result<OAuthToken, OAuthError> {
-        let url = self.base_url.join("/token")?;
+        let url = self.endpoint("token")?;
         let mut form = vec![
             ("grant_type", "authorization_code"),
             ("code", code),
@@ -87,7 +99,10 @@ impl OAuthClient {
             Ok(response.json::<OAuthToken>().await?)
         } else {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(text) => text,
+                Err(err) => format!("<failed to read response body: {err}>"),
+            };
             Err(OAuthError::Api { status, body })
         }
     }
@@ -97,7 +112,7 @@ impl OAuthClient {
         refresh_token: &str,
         scope: Option<&str>,
     ) -> Result<OAuthToken, OAuthError> {
-        let url = self.base_url.join("/token")?;
+        let url = self.endpoint("token")?;
         let mut form = vec![
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
@@ -113,13 +128,16 @@ impl OAuthClient {
             Ok(response.json::<OAuthToken>().await?)
         } else {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(text) => text,
+                Err(err) => format!("<failed to read response body: {err}>"),
+            };
             Err(OAuthError::Api { status, body })
         }
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct OAuthToken {
     pub access_token: String,
     pub token_type: String,
@@ -129,4 +147,16 @@ pub struct OAuthToken {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+}
+
+impl std::fmt::Debug for OAuthToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthToken")
+            .field("access_token", &"[REDACTED]")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field("scope", &self.scope)
+            .finish()
+    }
 }

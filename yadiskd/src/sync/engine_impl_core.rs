@@ -325,15 +325,17 @@ impl SyncEngine {
                 }
             }
         }
+        let states: HashMap<_, _> = self
+            .index
+            .list_states_by_prefix(path)
+            .await?
+            .into_iter()
+            .collect();
         for target in targets {
-            let state = self.index.get_state(target.id).await?;
-            let current_state = state
-                .as_ref()
-                .map(|row| row.state.clone())
-                .unwrap_or(FileState::CloudOnly);
-            let last_error = state.as_ref().and_then(|row| row.last_error.as_deref());
+            let current_state =
+                state_for_path_variant(&states, &target.path).unwrap_or(FileState::CloudOnly);
             self.index
-                .set_state(target.id, current_state, pinned, last_error)
+                .set_state(target.id, current_state, pinned, None)
                 .await?;
         }
         Ok(())

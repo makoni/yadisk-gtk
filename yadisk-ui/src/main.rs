@@ -157,17 +157,14 @@ fn main() -> anyhow::Result<()> {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("yadiskd D-Bus service is not available"))?
             .logout()?,
-        CliMode::Status
-        | CliMode::StartDaemon
+        CliMode::StartDaemon
         | CliMode::StopDaemon
         | CliMode::RestartDaemon
-        | CliMode::CheckIntegrations
-        | CliMode::InstallIntegrationsGuided
-        | CliMode::InstallIntegrationsAuto
-        | CliMode::ShowSettings
-        | CliMode::Diagnostics
         | CliMode::EnableAutostart
-        | CliMode::DisableAutostart => {}
+        | CliMode::DisableAutostart
+        | CliMode::InstallIntegrationsGuided
+        | CliMode::InstallIntegrationsAuto => unreachable!("handled above and returned early"),
+        CliMode::Status | CliMode::CheckIntegrations | CliMode::ShowSettings | CliMode::Diagnostics => {}
         CliMode::Gtk
         | CliMode::GtkWelcome
         | CliMode::GtkSync

@@ -6,6 +6,7 @@ license = "MIT"
 description = "Core client for the Yandex Disk REST API"
 
 [dependencies]
+httpdate = "1.0"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"

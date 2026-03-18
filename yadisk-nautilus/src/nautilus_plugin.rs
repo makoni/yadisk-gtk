@@ -5,6 +5,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+static NEXT_ACTION_ID: AtomicUsize = AtomicUsize::new(1);
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::thread;
 
@@ -309,12 +310,14 @@ fn attach_action_context(
         return;
     }
 
+    let id = NEXT_ACTION_ID.fetch_add(1, Ordering::Relaxed);
+
     if let Ok(mut contexts) = action_contexts().lock() {
         if contexts.len() > 8192 {
             contexts.clear();
         }
         contexts.insert(
-            item as usize,
+            id,
             ActionContext {
                 action,
                 local_paths: local_paths.to_vec(),
@@ -339,20 +342,21 @@ fn attach_action_context(
             item as *mut GObject,
             signal_name.as_ptr(),
             callback,
-            ptr::null_mut(),
+            id as gpointer,
             None,
             0,
         );
     }
 }
 
-unsafe extern "C" fn menu_item_activate_cb(item: *mut NautilusMenuItem, _user_data: gpointer) {
+unsafe extern "C" fn menu_item_activate_cb(_item: *mut NautilusMenuItem, user_data: gpointer) {
+    let id = user_data as usize;
     let context = {
         let Ok(contexts) = action_contexts().lock() else {
             eprintln!("[yadisk-nautilus] action context lock failed");
             return;
         };
-        contexts.get(&(item as usize)).cloned()
+        contexts.get(&id).cloned()
     };
     let Some(context) = context else {
         eprintln!("[yadisk-nautilus] action context not found");

@@ -544,3 +544,25 @@ async fn copy_resource_returns_none_on_201() {
         .unwrap();
     assert!(link.is_none(), "201 response should return None (immediate completion)");
 }
+
+#[tokio::test]
+async fn base_url_with_path_prefix_is_preserved() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/proxy/yandex/v1/disk"))
+        .and(header("authorization", "OAuth test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total_space": 500,
+            "used_space": 100,
+            "trash_size": 0,
+            "is_paid": false
+        })))
+        .mount(&server)
+        .await;
+
+    let base = format!("{}/proxy/yandex/", server.uri());
+    let client = YadiskClient::with_base_url(&base, "test-token").unwrap();
+    let info = client.get_disk_info().await.unwrap();
+    assert_eq!(info.total_space, 500);
+}

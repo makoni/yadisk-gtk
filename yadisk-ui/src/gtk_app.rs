@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::rc::Rc;
 
@@ -31,6 +31,34 @@ const ACTION_INTEGRATIONS_REMOVE: &str = "action-integrations-remove";
 const ACTION_AUTOSTART_ENABLE: &str = "action-autostart-enable";
 const ACTION_AUTOSTART_DISABLE: &str = "action-autostart-disable";
 const ACTION_DIAGNOSTICS_DUMP: &str = "action-diagnostics-dump";
+
+/// Run `work` on a background thread, then call `then` on the GTK main thread.
+fn spawn_blocking<W, T, C>(work: W, then: C)
+where
+    W: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+    C: FnOnce(T) + 'static,
+{
+    // SAFETY: `then` is created on the main (GTK) thread. We convert it to a
+    // raw pointer (as usize) so it can cross the thread boundary without
+    // requiring Send. The background thread never dereferences the pointer —
+    // it only forwards it to `glib::idle_add_once`, which runs the callback
+    // on the main thread where the closure is reconstructed and called.
+    let then_ptr = Box::into_raw(Box::new(then)) as usize;
+    std::thread::spawn(move || {
+        let result = work();
+        glib::idle_add_once(move || {
+            let f = unsafe { *Box::from_raw(then_ptr as *mut C) };
+            f(result);
+        });
+    });
+}
+
+enum AuthStartOutcome {
+    ShowAuth(String),
+    ShowCredentials(String),
+    ShowError(String),
+}
 
 struct Widgets {
     overview_auth_badge: gtk4::Label,
@@ -89,11 +117,20 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
         if let Some(start_tab) = start_tab.as_deref() {
             stack.set_visible_child_name(start_tab);
         }
-        refresh_ui(&widgets);
+        apply_model(&widgets, &UiModel::collect());
         {
             let widgets_for_tick = Rc::clone(&widgets);
+            let refresh_pending = Rc::new(Cell::new(false));
             glib::timeout_add_seconds_local(5, move || {
-                refresh_ui(&widgets_for_tick);
+                if !refresh_pending.get() {
+                    refresh_pending.set(true);
+                    let widgets = Rc::clone(&widgets_for_tick);
+                    let pending = Rc::clone(&refresh_pending);
+                    spawn_blocking(UiModel::collect, move |model| {
+                        apply_model(&widgets, &model);
+                        pending.set(false);
+                    });
+                }
                 glib::ControlFlow::Continue
             });
         }
@@ -110,7 +147,7 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
         refresh_button.add_css_class("flat");
         refresh_button.set_tooltip_text(Some("Refresh status"));
         let widgets_for_refresh = Rc::clone(&widgets);
-        refresh_button.connect_clicked(move |_| refresh_ui(&widgets_for_refresh));
+        refresh_button.connect_clicked(move |_| refresh_ui_async(&widgets_for_refresh));
 
         let header = libadwaita::HeaderBar::builder()
             .title_widget(&gtk4::Label::new(Some("Yandex Disk")))
@@ -465,57 +502,73 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         let window = window.clone();
         let stack = stack.clone();
         button.connect_clicked(move |_| {
-            match start_auth_with_daemon_bootstrap() {
-                Ok(url) => {
-                    open_browser_url(&url);
-                    prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
-                }
-                Err(err) => {
-                    let mut message = err.to_string();
-                    if !oauth_credentials_configured()
-                        && auto_import_oauth_credentials().unwrap_or(false)
-                    {
-                        match start_auth_with_daemon_bootstrap() {
-                            Ok(url) => {
-                                open_browser_url(&url);
-                                prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
-                                refresh_ui(&widgets);
-                                return;
+            let widgets = Rc::clone(&widgets);
+            let window = window.clone();
+            let stack = stack.clone();
+            spawn_blocking(
+                || -> AuthStartOutcome {
+                    match start_auth_with_daemon_bootstrap() {
+                        Ok(url) => AuthStartOutcome::ShowAuth(url),
+                        Err(err) => {
+                            let mut message = err.to_string();
+                            if !oauth_credentials_configured()
+                                && auto_import_oauth_credentials().unwrap_or(false)
+                            {
+                                match start_auth_with_daemon_bootstrap() {
+                                    Ok(url) => return AuthStartOutcome::ShowAuth(url),
+                                    Err(retry_err) => message = retry_err.to_string(),
+                                }
                             }
-                            Err(import_retry_err) => {
-                                message = import_retry_err.to_string();
+                            if auth_env_missing_error(&message) || !oauth_credentials_configured() {
+                                AuthStartOutcome::ShowCredentials(message)
+                            } else {
+                                AuthStartOutcome::ShowError(message)
                             }
                         }
                     }
-                    if auth_env_missing_error(&message) || !oauth_credentials_configured() {
-                        prompt_oauth_credentials_dialog(
-                            &window,
-                            &stack,
-                            Rc::clone(&widgets),
-                            &message,
-                        );
-                    } else {
-                        show_text_dialog(
-                            &window,
-                            "Start Auth failed",
-                            &format!(
-                                "Could not start authorization.\n\n{}\n\nCheck daemon status and try again.",
-                                message
-                            ),
-                        );
+                },
+                move |outcome| {
+                    match outcome {
+                        AuthStartOutcome::ShowAuth(url) => {
+                            open_browser_url(&url);
+                            prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
+                        }
+                        AuthStartOutcome::ShowCredentials(message) => {
+                            prompt_oauth_credentials_dialog(
+                                &window,
+                                &stack,
+                                Rc::clone(&widgets),
+                                &message,
+                            );
+                        }
+                        AuthStartOutcome::ShowError(message) => {
+                            show_text_dialog(
+                                &window,
+                                "Start Auth failed",
+                                &format!(
+                                    "Could not start authorization.\n\n{}\n\nCheck daemon status and try again.",
+                                    message
+                                ),
+                            );
+                        }
                     }
-                }
-            }
-            refresh_ui(&widgets);
+                    refresh_ui_async(&widgets);
+                },
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_AUTH_CANCEL) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            if let Ok(client) = ControlClient::connect() {
-                let _ = client.cancel_auth();
-            }
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || {
+                    if let Ok(client) = ControlClient::connect() {
+                        let _ = client.cancel_auth();
+                    }
+                },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_LOGOUT) {
@@ -534,13 +587,19 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
             dialog.set_response_appearance("logout", libadwaita::ResponseAppearance::Destructive);
             let widgets_for_response = Rc::clone(&widgets);
             dialog.connect_response(None, move |dialog, response| {
-                if response == "logout"
-                    && let Ok(client) = ControlClient::connect()
-                {
-                    let _ = client.logout();
-                }
+                let do_logout = response == "logout";
                 dialog.hide();
-                refresh_ui(&widgets_for_response);
+                let widgets = Rc::clone(&widgets_for_response);
+                spawn_blocking(
+                    move || {
+                        if do_logout {
+                            if let Ok(client) = ControlClient::connect() {
+                                let _ = client.logout();
+                            }
+                        }
+                    },
+                    move |()| refresh_ui_async(&widgets),
+                );
             });
             dialog.present();
         });
@@ -548,29 +607,38 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
     if let Some(button) = find_button(stack, ACTION_DAEMON_START) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let _ = run_service_action(ServiceAction::Start);
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || { let _ = run_service_action(ServiceAction::Start); },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_DAEMON_STOP) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let _ = run_service_action(ServiceAction::Stop);
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || { let _ = run_service_action(ServiceAction::Stop); },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_DAEMON_RESTART) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let _ = run_service_action(ServiceAction::Restart);
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || { let _ = run_service_action(ServiceAction::Restart); },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_CHECK) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
             widgets.integration_guided_commands.borrow_mut().take();
-            refresh_ui(&widgets);
+            refresh_ui_async(&widgets);
         });
     }
     if let Some(button) = find_button(stack, ACTION_INTEGRATIONS_GUIDED) {
@@ -590,31 +658,29 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         let window = window.clone();
         button.connect_clicked(move |_| {
             widgets.integration_guided_commands.borrow_mut().take();
-            if let Err(err) = ensure_auto_install_permissions() {
-                show_text_dialog(
-                    &window,
-                    "Auto install unavailable",
-                    &format!(
-                        "Automatic install requires write access to the Nautilus extension directory or administrator privileges.\n\n{err}"
-                    ),
-                );
-                refresh_ui(&widgets);
-                return;
-            }
-            if let Err(err) = run_auto_install() {
-                show_text_dialog(
-                    &window,
-                    "Auto install failed",
-                    &format!("Could not install integration components:\n{err}"),
-                );
-                refresh_ui(&widgets);
-                return;
-            }
-            refresh_ui(&widgets);
-            prompt_nautilus_restart_dialog(
-                &window,
-                Rc::clone(&widgets),
-                "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems.",
+            let widgets = Rc::clone(&widgets);
+            let window = window.clone();
+            spawn_blocking(
+                || -> Result<(), String> {
+                    ensure_auto_install_permissions().map_err(|e| format!("Automatic install requires write access to the Nautilus extension directory or administrator privileges.\n\n{e}"))?;
+                    run_auto_install().map_err(|e| format!("Could not install integration components:\n{e}"))
+                },
+                move |result| {
+                    match result {
+                        Ok(()) => {
+                            refresh_ui_async(&Rc::clone(&widgets));
+                            prompt_nautilus_restart_dialog(
+                                &window,
+                                Rc::clone(&widgets),
+                                "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems.",
+                            );
+                        }
+                        Err(msg) => {
+                            show_text_dialog(&window, "Auto install failed", &msg);
+                            refresh_ui_async(&widgets);
+                        }
+                    }
+                },
             );
         });
     }
@@ -635,33 +701,42 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
             let widgets_for_response = Rc::clone(&widgets);
             let window_for_response = window.clone();
             dialog.connect_response(None, move |dialog, response| {
-                let mut ask_restart = false;
-                if response == "remove" {
+                let do_remove = response == "remove";
+                if do_remove {
                     widgets_for_response
                         .integration_guided_commands
                         .borrow_mut()
                         .take();
-                    if let Err(err) = run_auto_uninstall() {
-                        show_text_dialog(
-                            &window_for_response,
-                            "Remove integrations failed",
-                            &format!(
-                                "Could not remove all integration files:\n{err}\n\nSome system files may require administrator privileges."
-                            ),
-                        );
-                    } else {
-                        ask_restart = true;
-                    }
                 }
                 dialog.hide();
-                refresh_ui(&widgets_for_response);
-                if ask_restart {
-                    prompt_nautilus_restart_dialog(
-                        &window_for_response,
-                        Rc::clone(&widgets_for_response),
-                        "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays.",
-                    );
-                }
+                let widgets = Rc::clone(&widgets_for_response);
+                let window = window_for_response.clone();
+                spawn_blocking(
+                    move || {
+                        if do_remove { run_auto_uninstall().err() } else { None }
+                    },
+                    move |uninstall_err| {
+                        if let Some(err) = uninstall_err {
+                            show_text_dialog(
+                                &window,
+                                "Remove integrations failed",
+                                &format!(
+                                    "Could not remove all integration files:\n{err}\n\nSome system files may require administrator privileges."
+                                ),
+                            );
+                            refresh_ui_async(&widgets);
+                        } else if do_remove {
+                            refresh_ui_async(&Rc::clone(&widgets));
+                            prompt_nautilus_restart_dialog(
+                                &window,
+                                Rc::clone(&widgets),
+                                "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays.",
+                            );
+                        } else {
+                            refresh_ui_async(&widgets);
+                        }
+                    },
+                );
             });
             dialog.present();
         });
@@ -669,36 +744,50 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
     if let Some(button) = find_button(stack, ACTION_AUTOSTART_ENABLE) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let _ = run_service_action(ServiceAction::EnableAutostart);
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || { let _ = run_service_action(ServiceAction::EnableAutostart); },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_AUTOSTART_DISABLE) {
         let widgets = Rc::clone(&widgets);
         button.connect_clicked(move |_| {
-            let _ = run_service_action(ServiceAction::DisableAutostart);
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            spawn_blocking(
+                || { let _ = run_service_action(ServiceAction::DisableAutostart); },
+                move |()| refresh_ui_async(&widgets),
+            );
         });
     }
     if let Some(button) = find_button(stack, ACTION_DIAGNOSTICS_DUMP) {
         let widgets = Rc::clone(&widgets);
         let window = window.clone();
         button.connect_clicked(move |_| {
-            let model = UiModel::collect();
-            match diagnostics_report_json(
-                model.control.as_ref(),
-                model.service.as_ref(),
-                &model.integrations,
-                model.settings.clone(),
-            ) {
-                Ok(json) => show_text_dialog(&window, "Diagnostics", &json),
-                Err(err) => show_text_dialog(
-                    &window,
-                    "Diagnostics error",
-                    &format!("Failed to build diagnostics report:\n{err}"),
-                ),
-            }
-            refresh_ui(&widgets);
+            let widgets = Rc::clone(&widgets);
+            let window = window.clone();
+            spawn_blocking(
+                || {
+                    let model = UiModel::collect();
+                    match diagnostics_report_json(
+                        model.control.as_ref(),
+                        model.service.as_ref(),
+                        &model.integrations,
+                        model.settings.clone(),
+                    ) {
+                        Ok(json) => Ok(json),
+                        Err(err) => Err(format!("Failed to build diagnostics report:\n{err}")),
+                    }
+                },
+                move |result| {
+                    match result {
+                        Ok(json) => show_text_dialog(&window, "Diagnostics", &json),
+                        Err(msg) => show_text_dialog(&window, "Diagnostics error", &msg),
+                    }
+                    refresh_ui_async(&widgets);
+                },
+            );
         });
     }
 }
@@ -796,34 +885,47 @@ fn prompt_auth_code_dialog(
     dialog.connect_response(move |dialog, response| match response {
         gtk4::ResponseType::Accept => {
             let code = entry_for_response.text().trim().to_string();
-            if !code.is_empty() {
-                match submit_auth_code_with_daemon_bootstrap(&code) {
-                    Ok(()) => {
-                        let integration_needs_setup = run_post_auth_steps();
-                        if integration_needs_setup {
-                            stack_for_response.set_visible_child_name("integrations");
-                        } else {
-                            stack_for_response.set_visible_child_name("sync");
-                        }
-                    }
-                    Err(err) => {
-                        show_text_dialog(
-                            &window_for_response,
-                            "Authorization failed",
-                            &format!("Failed to submit verification code:\n{err}"),
-                        );
-                    }
-                }
-            }
             dialog.close();
-            refresh_ui(&widgets);
+            if !code.is_empty() {
+                let w = Rc::clone(&widgets);
+                let stack = stack_for_response.clone();
+                let window = window_for_response.clone();
+                spawn_blocking(
+                    move || -> Result<bool, String> {
+                        submit_auth_code_with_daemon_bootstrap(&code)
+                            .map_err(|e| e.to_string())?;
+                        Ok(run_post_auth_steps())
+                    },
+                    move |result| {
+                        match result {
+                            Ok(integration_needs_setup) => {
+                                if integration_needs_setup {
+                                    stack.set_visible_child_name("integrations");
+                                } else {
+                                    stack.set_visible_child_name("sync");
+                                }
+                            }
+                            Err(msg) => {
+                                show_text_dialog(
+                                    &window,
+                                    "Authorization failed",
+                                    &format!("Failed to submit verification code:\n{msg}"),
+                                );
+                            }
+                        }
+                        refresh_ui_async(&w);
+                    },
+                );
+            } else {
+                refresh_ui_async(&widgets);
+            }
         }
         gtk4::ResponseType::Other(1) => {
             open_browser_url(&auth_url_for_response);
         }
         _ => {
             dialog.close();
-            refresh_ui(&widgets);
+            refresh_ui_async(&widgets);
         }
     });
     dialog.present();
@@ -869,27 +971,36 @@ fn prompt_nautilus_restart_dialog(
     dialog.set_response_appearance("restart", libadwaita::ResponseAppearance::Suggested);
     let window_for_response = window.clone();
     dialog.connect_response(None, move |dialog, response| {
-        if response == "restart"
-            && let Err(err) = restart_nautilus()
-        {
-            show_text_dialog(
-                &window_for_response,
-                "Restart Files failed",
-                &format!("Could not restart Nautilus:\n{err}"),
-            );
-        }
+        let do_restart = response == "restart";
         dialog.hide();
-        refresh_ui(&widgets);
+        let w = Rc::clone(&widgets);
+        let window = window_for_response.clone();
+        spawn_blocking(
+            move || {
+                if do_restart {
+                    restart_nautilus()
+                        .err()
+                        .map(|e| format!("Could not restart Nautilus:\n{e}"))
+                } else {
+                    None
+                }
+            },
+            move |err_msg| {
+                if let Some(msg) = err_msg {
+                    show_text_dialog(&window, "Restart Files failed", &msg);
+                }
+                refresh_ui_async(&w);
+            },
+        );
     });
     dialog.present();
 }
 
 fn restart_nautilus() -> Result<()> {
-    let quit_status = Command::new("nautilus")
+    let _ = Command::new("nautilus")
         .arg("-q")
         .status()
         .context("failed to run nautilus -q")?;
-    let _quit_failed_nonfatal = !quit_status.success() && quit_status.code() != Some(255);
     Command::new("nautilus")
         .arg("--new-window")
         .spawn()
@@ -945,44 +1056,38 @@ fn prompt_oauth_credentials_dialog(
         if response == gtk4::ResponseType::Accept {
             let id = client_id_for_response.text().trim().to_string();
             let secret = client_secret_for_response.text().trim().to_string();
-            match configure_oauth_credentials(&id, &secret) {
-                Ok(()) => match start_auth_with_daemon_bootstrap() {
-                    Ok(url) => {
-                        open_browser_url(&url);
-                        prompt_auth_code_dialog(
-                            &window_for_response,
-                            &stack_for_response,
-                            Rc::clone(&widgets),
-                            url,
-                        );
-                    }
-                    Err(err) => {
-                        show_text_dialog(
-                            &window_for_response,
-                            "Start Auth failed",
-                            &format!(
-                                "Could not start authorization after saving credentials:\n{err}"
-                            ),
-                        );
-                    }
+            dialog.close();
+            let w = Rc::clone(&widgets);
+            let window = window_for_response.clone();
+            let stack = stack_for_response.clone();
+            spawn_blocking(
+                move || -> Result<String, String> {
+                    configure_oauth_credentials(&id, &secret)
+                        .map_err(|e| format!("Could not save OAuth credentials:\n{e}"))?;
+                    start_auth_with_daemon_bootstrap()
+                        .map_err(|e| format!("Could not start authorization after saving credentials:\n{e}"))
                 },
-                Err(err) => {
-                    show_text_dialog(
-                        &window_for_response,
-                        "Save credentials failed",
-                        &format!("Could not save OAuth credentials:\n{err}"),
-                    );
-                }
-            }
-            refresh_ui(&widgets);
+                move |result| {
+                    match result {
+                        Ok(url) => {
+                            open_browser_url(&url);
+                            prompt_auth_code_dialog(&window, &stack, Rc::clone(&w), url);
+                        }
+                        Err(msg) => {
+                            show_text_dialog(&window, "Auth error", &msg);
+                        }
+                    }
+                    refresh_ui_async(&w);
+                },
+            );
+        } else {
+            dialog.close();
         }
-        dialog.close();
     });
     dialog.present();
 }
 
-fn refresh_ui(widgets: &Widgets) {
-    let model = UiModel::collect();
+fn apply_model(widgets: &Widgets, model: &UiModel) {
     update_badge(&widgets.overview_auth_badge, model.auth_status);
     update_badge(&widgets.overview_daemon_badge, model.daemon_status);
     update_badge(
@@ -1031,7 +1136,14 @@ fn refresh_ui(widgets: &Widgets) {
     ));
     widgets.settings_label.set_selectable(false);
     widgets.diagnostics_label.set_selectable(false);
-    apply_action_visibility(widgets, &model);
+    apply_action_visibility(widgets, model);
+}
+
+fn refresh_ui_async(widgets: &Rc<Widgets>) {
+    let widgets = Rc::clone(widgets);
+    spawn_blocking(UiModel::collect, move |model| {
+        apply_model(&widgets, &model);
+    });
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
