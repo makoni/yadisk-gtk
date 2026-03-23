@@ -155,7 +155,10 @@ impl std::fmt::Debug for OAuthToken {
             .field("access_token", &"[REDACTED]")
             .field("token_type", &self.token_type)
             .field("expires_in", &self.expires_in)
-            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("scope", &self.scope)
             .finish()
     }

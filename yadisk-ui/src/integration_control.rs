@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use yadisk_integrations::i18n::tr;
 
 const NAUTILUS_LIB_NAME: &str = "libyadisk_nautilus.so";
 const FUSE_BIN_NAME: &str = "yadisk-fuse";
@@ -32,18 +33,18 @@ impl IntegrationStatus {
     pub fn summary_message(&self) -> String {
         let mut missing = Vec::new();
         if !self.nautilus_extension_installed {
-            missing.push("nautilus_extension");
+            missing.push(component_label("nautilus_extension"));
         }
         if !self.fuse_helper_installed {
-            missing.push("fuse_helper");
+            missing.push(component_label("fuse_helper"));
         }
         if !self.emblems_installed {
-            missing.push("emblems");
+            missing.push(component_label("emblems"));
         }
         if missing.is_empty() {
-            return "all integration components are present".to_string();
+            return tr("All integration components are present");
         }
-        format!("missing components: {}", missing.join(", "))
+        format!("{}: {}", tr("Missing components"), missing.join(", "))
     }
 }
 
@@ -194,6 +195,15 @@ fn command_exists(name: &str) -> bool {
         .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join(name).is_file()))
 }
 
+fn component_label(name: &str) -> String {
+    match name {
+        "nautilus_extension" => tr("Nautilus extension"),
+        "fuse_helper" => tr("FUSE helper"),
+        "emblems" => tr("Emblems"),
+        _ => name.to_string(),
+    }
+}
+
 fn install_nautilus_extension_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
         return PathBuf::from(path);
@@ -279,8 +289,8 @@ mod tests {
             emblems_installed: false,
         };
         assert_eq!(status.summary_state(), "needs_setup");
-        assert!(status.summary_message().contains("nautilus_extension"));
-        assert!(status.summary_message().contains("emblems"));
+        assert!(status.summary_message().contains("Nautilus extension"));
+        assert!(status.summary_message().contains("Emblems"));
     }
 
     #[test]

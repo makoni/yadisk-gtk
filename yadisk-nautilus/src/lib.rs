@@ -25,7 +25,9 @@ impl SyncUiState {
             "syncing" => Self::Syncing,
             "error" => Self::Error,
             other => {
-                eprintln!("[yadisk-nautilus] unknown sync state from D-Bus: {other:?}, defaulting to CloudOnly");
+                eprintln!(
+                    "[yadisk-nautilus] unknown sync state from D-Bus: {other:?}, defaulting to CloudOnly"
+                );
                 Self::CloudOnly
             }
         }

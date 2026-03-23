@@ -1,3 +1,4 @@
+use yadisk_integrations::i18n;
 use yadiskd::daemon::{DaemonConfig, DaemonRuntime};
 use yadiskd::storage::TokenStorage;
 
@@ -40,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliMode::Run => {}
     }
+    i18n::init();
     let config = DaemonConfig::from_env()?;
     let daemon = DaemonRuntime::bootstrap(config).await?;
     daemon.run().await

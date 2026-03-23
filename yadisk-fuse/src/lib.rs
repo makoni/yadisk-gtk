@@ -205,8 +205,8 @@ mod tests {
 
         let op = bridge.index.dequeue_op().await.unwrap().unwrap();
         assert_eq!(op.kind, OperationKind::Move);
-        let payload: serde_json::Value =
-            serde_json::from_str(op.payload.as_deref().unwrap()).expect("payload must be valid JSON");
+        let payload: serde_json::Value = serde_json::from_str(op.payload.as_deref().unwrap())
+            .expect("payload must be valid JSON");
         assert_eq!(payload["from"], "/Docs/file \"quotes\".txt");
         assert_eq!(payload["path"], "/Docs/new\\name.txt");
         assert_eq!(payload["overwrite"], true);

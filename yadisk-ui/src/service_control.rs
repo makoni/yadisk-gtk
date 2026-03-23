@@ -578,7 +578,10 @@ mod tests {
         let original = r#"ab"c\d"#;
         let quoted = quote_env_value(original);
         let parsed = parse_env_value(&quoted);
-        assert_eq!(parsed, original, "round-trip through quote/parse must preserve value");
+        assert_eq!(
+            parsed, original,
+            "round-trip through quote/parse must preserve value"
+        );
     }
 
     #[test]

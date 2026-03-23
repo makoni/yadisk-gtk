@@ -121,29 +121,31 @@ mod app {
             // Background thread: listen for D-Bus state_changed signals and
             // wake any FUSE threads waiting in ensure_downloaded.
             let notify = Arc::clone(&state_notify);
-            std::thread::spawn(move || loop {
-                let Ok(connection) = Connection::session() else {
-                    std::thread::sleep(Duration::from_secs(5));
-                    continue;
-                };
-                let Ok(proxy) = Proxy::new(
-                    &connection,
-                    DBUS_NAME_SYNC,
-                    DBUS_OBJECT_PATH_SYNC,
-                    DBUS_INTERFACE_SYNC,
-                ) else {
-                    std::thread::sleep(Duration::from_secs(5));
-                    continue;
-                };
-                let Ok(signals) = proxy.receive_signal("state_changed") else {
-                    std::thread::sleep(Duration::from_secs(5));
-                    continue;
-                };
-                for _signal in signals {
-                    notify.1.notify_all();
+            std::thread::spawn(move || {
+                loop {
+                    let Ok(connection) = Connection::session() else {
+                        std::thread::sleep(Duration::from_secs(5));
+                        continue;
+                    };
+                    let Ok(proxy) = Proxy::new(
+                        &connection,
+                        DBUS_NAME_SYNC,
+                        DBUS_OBJECT_PATH_SYNC,
+                        DBUS_INTERFACE_SYNC,
+                    ) else {
+                        std::thread::sleep(Duration::from_secs(5));
+                        continue;
+                    };
+                    let Ok(signals) = proxy.receive_signal("state_changed") else {
+                        std::thread::sleep(Duration::from_secs(5));
+                        continue;
+                    };
+                    for _signal in signals {
+                        notify.1.notify_all();
+                    }
+                    // Iterator ended (D-Bus disconnected) — reconnect after a short pause.
+                    std::thread::sleep(Duration::from_secs(1));
                 }
-                // Iterator ended (D-Bus disconnected) — reconnect after a short pause.
-                std::thread::sleep(Duration::from_secs(1));
             });
 
             Self {

@@ -1,4 +1,6 @@
+pub mod i18n;
 pub mod ids;
+pub mod preferences;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncUiState {

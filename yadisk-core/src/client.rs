@@ -45,8 +45,7 @@ impl YadiskClient {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(reqwest::Error::from)?;
+            .build()?;
         Ok(Self {
             http,
             base_url: Url::parse(base_url)?,
@@ -389,7 +388,11 @@ pub struct DiskInfo {
 }
 
 fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
     // Try integer seconds first (most common)
     if let Ok(secs) = value.parse::<u64>() {
         return Some(secs);

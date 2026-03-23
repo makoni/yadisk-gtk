@@ -8,6 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
 use yadisk_core::{OAuthClient, OAuthToken};
+use yadisk_integrations::i18n::{product_name, sync_with_saved_language, tr};
 
 #[derive(Debug, Error)]
 pub enum OAuthFlowError {
@@ -48,10 +49,10 @@ enum AuthUiBackend {
     Zenity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AuthUiErrorMessage {
-    title: &'static str,
-    body: &'static str,
+    title: String,
+    body: String,
 }
 
 pub struct OAuthFlow {
@@ -76,6 +77,7 @@ impl OAuthFlow {
 }
 
 async fn wait_for_verification_code(client_id: &str) -> Result<String, OAuthFlowError> {
+    sync_with_saved_language();
     let force_manual = env_flag("YADISK_OAUTH_FORCE_MANUAL");
     let backend = select_ui_backend(
         force_manual,
@@ -130,10 +132,12 @@ fn wait_for_verification_code_manual(
     let code = if matches!(backend, AuthUiBackend::Zenity) {
         prompt_ui(backend, AuthUiState::ManualCodePrompt, client_id, None)?;
         zenity_entry(
-            "Yandex Disk: код подтверждения",
+            format!("{}: {}", product_name(), tr("Verification code")).as_str(),
             &format!(
-                "Откройте URL и вставьте код:\n{}\n\nВведите verification code:",
-                url
+                "{}\n{}\n\n{}",
+                tr("Open this URL and paste the code:"),
+                url,
+                tr("Enter the verification code:")
             ),
         )?
     } else {
@@ -174,7 +178,17 @@ async fn wait_for_verification_code_via_loopback(
     let _ = stream
         .write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-            <html><body><h2>Yandex Disk connected</h2><p>You can return to the app.</p></body></html>",
+            <html><body><h2>",
+        )
+        .await;
+    let _ = stream
+        .write_all(
+            format!(
+                "{}</h2><p>{}</p></body></html>",
+                tr("Yandex Disk connected"),
+                tr("You can return to the app.")
+            )
+            .as_bytes(),
         )
         .await;
     let _ = stream.shutdown().await;
@@ -272,28 +286,36 @@ fn has_zenity_available() -> bool {
 fn map_error_for_ui(err: &OAuthFlowError) -> AuthUiErrorMessage {
     match err {
         OAuthFlowError::Timeout => AuthUiErrorMessage {
-            title: "Время ожидания истекло",
-            body: "Не получен callback от браузера. Проверьте, что вход подтверждён, и повторите попытку.",
+            title: tr("Authorization timed out"),
+            body: tr(
+                "No callback was received from the browser. Confirm the sign-in and try again.",
+            ),
         },
         OAuthFlowError::Portal(_) => AuthUiErrorMessage {
-            title: "Не удалось открыть браузер",
-            body: "Портал OpenURI недоступен. Можно повторить попытку или ввести код вручную.",
+            title: tr("Could not open the browser"),
+            body: tr(
+                "The OpenURI portal is unavailable. You can retry or enter the code manually.",
+            ),
         },
         OAuthFlowError::MissingCode => AuthUiErrorMessage {
-            title: "Код подтверждения не получен",
-            body: "Сервис не вернул параметр code. Повторите вход или введите код вручную.",
+            title: tr("Verification code was not received"),
+            body: tr(
+                "The service did not return the code parameter. Retry sign-in or enter the code manually.",
+            ),
         },
         OAuthFlowError::OAuth(_) => AuthUiErrorMessage {
-            title: "Ошибка обмена OAuth-кода",
-            body: "Не удалось обменять код на токен. Проверьте клиентские ключи и сеть.",
+            title: tr("OAuth code exchange failed"),
+            body: tr(
+                "Could not exchange the code for a token. Check the client credentials and network.",
+            ),
         },
         OAuthFlowError::Io(_) => AuthUiErrorMessage {
-            title: "Ошибка ввода-вывода",
-            body: "Локальная операция завершилась ошибкой. Повторите попытку.",
+            title: tr("Input/output error"),
+            body: tr("A local operation failed. Please try again."),
         },
         OAuthFlowError::Cancelled => AuthUiErrorMessage {
-            title: "Авторизация отменена",
-            body: "Пользователь отменил процесс авторизации.",
+            title: tr("Authorization cancelled"),
+            body: tr("The authorization flow was cancelled by the user."),
         },
     }
 }
@@ -311,13 +333,15 @@ fn prompt_ui(
     match state {
         AuthUiState::Intro => {
             if zenity_question(
-                "Подключение Яндекс Диска",
+                tr("Connect Yandex Disk").as_str(),
                 &format!(
-                    "Сейчас откроется системный браузер для входа.\n\nURL: {}\n\nПродолжить?",
-                    auth_url
+                    "{}\n\nURL: {}\n\n{}",
+                    tr("Your system browser will open for sign-in."),
+                    auth_url,
+                    tr("Continue?")
                 ),
-                "Продолжить",
-                "Отмена",
+                tr("Continue").as_str(),
+                tr("Cancel").as_str(),
             )? {
                 Ok(AuthUiAction::Continue)
             } else {
@@ -328,30 +352,30 @@ fn prompt_ui(
         AuthUiState::ManualCodePrompt => Ok(AuthUiAction::UseManualCode),
         AuthUiState::Success => {
             zenity_info(
-                "Яндекс Диск подключён",
-                "Авторизация выполнена успешно. Можно вернуться к работе.",
+                tr("Yandex Disk connected").as_str(),
+                tr("Authorization completed successfully. You can return to the app.").as_str(),
             )?;
             Ok(AuthUiAction::Continue)
         }
         AuthUiState::Error => {
             let message = error.map(map_error_for_ui).unwrap_or(AuthUiErrorMessage {
-                title: "Ошибка авторизации",
-                body: "Авторизация завершилась ошибкой.",
+                title: tr("Authorization error"),
+                body: tr("The authorization flow failed."),
             });
             let retry = zenity_question(
-                message.title,
-                message.body,
-                "Повторить",
-                "Ввести код вручную",
+                &message.title,
+                &message.body,
+                tr("Retry").as_str(),
+                tr("Enter code manually").as_str(),
             )?;
             if retry {
                 Ok(AuthUiAction::Retry)
             } else {
                 let manual = zenity_question(
-                    "Ручной ввод кода",
-                    "Перейти к ручному вводу verification code?",
-                    "Да",
-                    "Отмена",
+                    tr("Manual code entry").as_str(),
+                    tr("Switch to manual verification code entry?").as_str(),
+                    tr("Yes").as_str(),
+                    tr("Cancel").as_str(),
                 )?;
                 if manual {
                     Ok(AuthUiAction::UseManualCode)
@@ -465,7 +489,7 @@ mod tests {
     #[test]
     fn maps_timeout_error_to_user_facing_text() {
         let msg = map_error_for_ui(&OAuthFlowError::Timeout);
-        assert!(msg.title.contains("ожидания"));
+        assert!(!msg.title.is_empty());
     }
 
     #[test]

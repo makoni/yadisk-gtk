@@ -490,7 +490,10 @@ async fn list_directory_all_breaks_on_empty_page() {
 
     let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
     let items = client.list_directory_all("/Empty", 10, None).await.unwrap();
-    assert!(items.is_empty(), "should return empty vec when server returns no items");
+    assert!(
+        items.is_empty(),
+        "should return empty vec when server returns no items"
+    );
 }
 
 #[tokio::test]
@@ -516,7 +519,10 @@ async fn move_resource_returns_none_on_201() {
         .move_resource("/Docs/A.txt", "/Docs/B.txt", true)
         .await
         .unwrap();
-    assert!(link.is_none(), "201 response should return None (immediate completion)");
+    assert!(
+        link.is_none(),
+        "201 response should return None (immediate completion)"
+    );
 }
 
 #[tokio::test]
@@ -542,7 +548,10 @@ async fn copy_resource_returns_none_on_201() {
         .copy_resource("/Docs/A.txt", "/Docs/C.txt", false)
         .await
         .unwrap();
-    assert!(link.is_none(), "201 response should return None (immediate completion)");
+    assert!(
+        link.is_none(),
+        "201 response should return None (immediate completion)"
+    );
 }
 
 #[tokio::test]

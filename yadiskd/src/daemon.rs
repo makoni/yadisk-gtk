@@ -23,8 +23,9 @@ use crate::sync::local_watcher::{LocalEvent, start_notify_watcher};
 #[cfg(test)]
 use crate::token_provider::TokenProvider;
 use crate::tray::{TraySyncState, start_status_tray};
+use yadisk_integrations::preferences::{load_ui_preferences, resolve_effective_language};
 
-const DEFAULT_SYNC_DIR_NAME: &str = "Yandex Disk";
+pub(crate) const DEFAULT_SYNC_DIR_NAME: &str = "Yandex Disk";
 const DEFAULT_REMOTE_ROOT: &str = "disk:/";
 const DEFAULT_CLOUD_POLL_SECS: u64 = 15;
 const DEFAULT_WORKER_LOOP_MS: u64 = 500;
@@ -45,12 +46,8 @@ pub struct DaemonConfig {
 
 impl DaemonConfig {
     pub fn from_env() -> anyhow::Result<Self> {
+        let sync_root = resolve_sync_root_from_env()?;
         let home = dirs::home_dir().context("home directory is unavailable")?;
-        let default_sync = home.join(DEFAULT_SYNC_DIR_NAME);
-        let sync_root = std::env::var("YADISK_SYNC_DIR")
-            .ok()
-            .map(|value| expand_with_home(&value, &home))
-            .unwrap_or(default_sync);
         let cache_root = std::env::var("YADISK_CACHE_DIR")
             .ok()
             .map(|value| expand_with_home(&value, &home))
@@ -81,6 +78,21 @@ impl DaemonConfig {
             enable_local_watcher,
         })
     }
+}
+
+pub(crate) fn resolve_sync_root_from_env() -> anyhow::Result<PathBuf> {
+    let home = dirs::home_dir().context("home directory is unavailable")?;
+    Ok(resolve_sync_root_path(
+        std::env::var("YADISK_SYNC_DIR").ok(),
+        &home,
+    ))
+}
+
+pub(crate) fn resolve_sync_root_path(value: Option<String>, home: &Path) -> PathBuf {
+    value
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| expand_with_home(&path, home))
+        .unwrap_or_else(|| home.join(DEFAULT_SYNC_DIR_NAME))
 }
 
 pub struct DaemonRuntime {
@@ -196,7 +208,9 @@ impl DaemonRuntime {
         let auth_ready_cloud = Arc::clone(&self.auth_ready);
         let cloud_handle = tokio::spawn(async move {
             loop {
-                if !auth_ready_cloud.load(Ordering::SeqCst) || !sync_root_available_cloud.load(Ordering::SeqCst) {
+                if !auth_ready_cloud.load(Ordering::SeqCst)
+                    || !sync_root_available_cloud.load(Ordering::SeqCst)
+                {
                     tokio::time::sleep(cloud_poll_interval).await;
                     continue;
                 }
@@ -228,7 +242,9 @@ impl DaemonRuntime {
         let auth_ready_worker = Arc::clone(&self.auth_ready);
         let worker_handle = tokio::spawn(async move {
             loop {
-                if !auth_ready_worker.load(Ordering::SeqCst) || !sync_root_available_worker.load(Ordering::SeqCst) {
+                if !auth_ready_worker.load(Ordering::SeqCst)
+                    || !sync_root_available_worker.load(Ordering::SeqCst)
+                {
                     tokio::time::sleep(worker_interval).await;
                     continue;
                 }
@@ -386,10 +402,15 @@ impl DaemonRuntime {
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
             let mut known_tray_state: Option<TraySyncState> = None;
+            let mut known_tray_language: Option<String> = None;
             let mut known_daemon_state: Option<(&'static str, &'static str)> = None;
             let mut last_conflict_id = 0i64;
 
             loop {
+                let tray_language =
+                    resolve_effective_language(load_ui_preferences().language_preference);
+                let language_changed =
+                    known_tray_language.as_deref() != Some(tray_language.as_str());
                 if let Ok(states) = engine_for_signals.list_states_by_prefix(&signal_root).await {
                     let mut current_states = HashMap::with_capacity(states.len());
                     for (path, state) in states {
@@ -420,7 +441,7 @@ impl DaemonRuntime {
                         sync_root_available_signal.load(Ordering::SeqCst),
                         cloud_sync_error_signal.load(Ordering::SeqCst),
                     );
-                    if known_tray_state != Some(tray_state) {
+                    if known_tray_state != Some(tray_state) || language_changed {
                         let _ = tray_state_tx_signal.send(tray_state);
                         known_tray_state = Some(tray_state);
                     }
@@ -439,9 +460,11 @@ impl DaemonRuntime {
                         known_daemon_state = Some(daemon_state);
                     }
                     known_states = current_states;
-                } else {
+                } else if known_tray_state != Some(TraySyncState::Error) || language_changed {
                     let _ = tray_state_tx_signal.send(TraySyncState::Error);
+                    known_tray_state = Some(TraySyncState::Error);
                 }
+                known_tray_language = Some(tray_language);
 
                 if let Ok(conflicts) = engine_for_signals.list_conflicts().await {
                     for conflict in conflicts {

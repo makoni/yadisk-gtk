@@ -459,7 +459,11 @@ async fn like_query_escapes_underscore_in_path() {
         .unwrap();
 
     let items = store.list_items_by_prefix("/My_Docs").await.unwrap();
-    assert_eq!(items.len(), 1, "underscore must not match arbitrary character");
+    assert_eq!(
+        items.len(),
+        1,
+        "underscore must not match arbitrary character"
+    );
     assert_eq!(items[0].path, "/My_Docs/A.txt");
 }
 

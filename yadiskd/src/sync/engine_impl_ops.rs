@@ -318,16 +318,14 @@ impl SyncEngine {
             .client
             .get_resource_with_fields(path, Some(&["md5"]))
             .await
+            && let Some(remote_md5) = &remote.md5
+            && !remote_md5.eq_ignore_ascii_case(&local_version.hash)
         {
-            if let Some(remote_md5) = &remote.md5 {
-                if remote_md5.to_ascii_lowercase() != local_version.hash.to_ascii_lowercase() {
-                    return Err(TransferError::IntegrityMismatch {
-                        expected_md5: local_version.hash.clone(),
-                        actual_md5: remote_md5.clone(),
-                    }
-                    .into());
-                }
+            return Err(TransferError::IntegrityMismatch {
+                expected_md5: local_version.hash.clone(),
+                actual_md5: remote_md5.clone(),
             }
+            .into());
         }
 
         self.mark_item_synced(item, path, local_version).await

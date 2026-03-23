@@ -5,7 +5,9 @@ use std::rc::Rc;
 use anyhow::{Context, Result};
 use gtk4::{gio, glib, prelude::*};
 use libadwaita::prelude::*;
+use yadisk_integrations::i18n::{apply_language_preference, product_name, tr};
 use yadisk_integrations::ids::APP_ID_GTK;
+use yadisk_integrations::preferences::{LanguagePreference, load_ui_preferences};
 
 use crate::control_client::ControlClient;
 use crate::diagnostics::diagnostics_report_json;
@@ -14,7 +16,7 @@ use crate::integration_control::{
 };
 use crate::service_control::{
     ServiceAction, auto_import_oauth_credentials, configure_oauth_credentials,
-    oauth_credentials_configured, run_service_action,
+    oauth_credentials_configured, query_daemon_service_status, run_service_action,
 };
 use crate::ui_model::UiModel;
 
@@ -55,9 +57,14 @@ where
 }
 
 enum AuthStartOutcome {
-    ShowAuth(String),
-    ShowCredentials(String),
-    ShowError(String),
+    AuthUrl(String),
+    CredentialsPrompt(String),
+    ErrorDialog(String),
+}
+
+struct PostAuthOutcome {
+    integration_needs_setup: bool,
+    warning: Option<String>,
 }
 
 struct Widgets {
@@ -72,6 +79,7 @@ struct Widgets {
     integration_label: gtk4::Label,
     integration_commands_box: gtk4::Box,
     settings_label: gtk4::Label,
+    language_dropdown: gtk4::DropDown,
     diagnostics_label: gtk4::Label,
     auth_start_button: gtk4::Button,
     auth_cancel_button: gtk4::Button,
@@ -90,89 +98,92 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
-    app.connect_activate(move |app| {
-        let stack = gtk4::Stack::builder()
-            .hexpand(true)
-            .vexpand(true)
-            .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-            .build();
-        let sidebar = gtk4::StackSidebar::builder().stack(&stack).build();
-        sidebar.add_css_class("navigation-sidebar");
-        sidebar.set_vexpand(true);
-        sidebar.set_width_request(182);
-        stack.add_css_class("content-stack");
-
-        let (
-            overview_strip,
-            overview_auth_badge,
-            overview_daemon_badge,
-            overview_integration_badge,
-        ) = build_overview_strip();
-        let widgets = Rc::new(build_pages(
-            &stack,
-            overview_auth_badge,
-            overview_daemon_badge,
-            overview_integration_badge,
-        ));
-        if let Some(start_tab) = start_tab.as_deref() {
-            stack.set_visible_child_name(start_tab);
-        }
-        apply_model(&widgets, &UiModel::collect());
-        {
-            let widgets_for_tick = Rc::clone(&widgets);
-            let refresh_pending = Rc::new(Cell::new(false));
-            glib::timeout_add_seconds_local(5, move || {
-                if !refresh_pending.get() {
-                    refresh_pending.set(true);
-                    let widgets = Rc::clone(&widgets_for_tick);
-                    let pending = Rc::clone(&refresh_pending);
-                    spawn_blocking(UiModel::collect, move |model| {
-                        apply_model(&widgets, &model);
-                        pending.set(false);
-                    });
-                }
-                glib::ControlFlow::Continue
-            });
-        }
-
-        let container = gtk4::Box::new(gtk4::Orientation::Horizontal, 16);
-        container.set_margin_start(18);
-        container.set_margin_end(18);
-        container.set_margin_top(12);
-        container.set_margin_bottom(18);
-        container.append(&sidebar);
-        container.append(&stack);
-
-        let refresh_button = gtk4::Button::from_icon_name("view-refresh-symbolic");
-        refresh_button.add_css_class("flat");
-        refresh_button.set_tooltip_text(Some("Refresh status"));
-        let widgets_for_refresh = Rc::clone(&widgets);
-        refresh_button.connect_clicked(move |_| refresh_ui_async(&widgets_for_refresh));
-
-        let header = libadwaita::HeaderBar::builder()
-            .title_widget(&gtk4::Label::new(Some("Yandex Disk")))
-            .build();
-        header.pack_end(&refresh_button);
-
-        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-        content.append(&header);
-        content.append(&overview_strip);
-        content.append(&container);
-
-        let window = libadwaita::ApplicationWindow::builder()
-            .application(app)
-            .title("Yandex Disk")
-            .default_width(1060)
-            .default_height(760)
-            .content(&content)
-            .build();
-
-        wire_actions(&stack, Rc::clone(&widgets), &window);
-        window.present();
-    });
+    app.connect_activate(move |app| build_window(app, start_tab.clone()));
 
     app.run_with_args::<&str>(&[]);
     Ok(())
+}
+
+fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
+    let stack = gtk4::Stack::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+        .build();
+    let sidebar = gtk4::StackSidebar::builder().stack(&stack).build();
+    sidebar.add_css_class("navigation-sidebar");
+    sidebar.set_vexpand(true);
+    sidebar.set_width_request(182);
+    stack.add_css_class("content-stack");
+
+    let (overview_strip, overview_auth_badge, overview_daemon_badge, overview_integration_badge) =
+        build_overview_strip();
+    let widgets = Rc::new(build_pages(
+        &stack,
+        overview_auth_badge,
+        overview_daemon_badge,
+        overview_integration_badge,
+    ));
+    if let Some(start_tab) = start_tab.as_deref() {
+        stack.set_visible_child_name(start_tab);
+    }
+    apply_model(&widgets, &UiModel::collect());
+
+    let container = gtk4::Box::new(gtk4::Orientation::Horizontal, 16);
+    container.set_margin_start(18);
+    container.set_margin_end(18);
+    container.set_margin_top(12);
+    container.set_margin_bottom(18);
+    container.append(&sidebar);
+    container.append(&stack);
+
+    let refresh_button = gtk4::Button::from_icon_name("view-refresh-symbolic");
+    refresh_button.add_css_class("flat");
+    refresh_button.set_tooltip_text(Some(tr("Refresh status").as_str()));
+    let widgets_for_refresh = Rc::clone(&widgets);
+    refresh_button.connect_clicked(move |_| refresh_ui_async(&widgets_for_refresh));
+
+    let header = libadwaita::HeaderBar::builder()
+        .title_widget(&gtk4::Label::new(Some(product_name())))
+        .build();
+    header.pack_end(&refresh_button);
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    content.append(&header);
+    content.append(&overview_strip);
+    content.append(&container);
+
+    let window = libadwaita::ApplicationWindow::builder()
+        .application(app)
+        .title(product_name())
+        .default_width(1060)
+        .default_height(760)
+        .content(&content)
+        .build();
+
+    {
+        let widgets_for_tick = Rc::clone(&widgets);
+        let refresh_pending = Rc::new(Cell::new(false));
+        let weak_window = window.downgrade();
+        glib::timeout_add_seconds_local(5, move || {
+            if weak_window.upgrade().is_none() {
+                return glib::ControlFlow::Break;
+            }
+            if !refresh_pending.get() {
+                refresh_pending.set(true);
+                let widgets = Rc::clone(&widgets_for_tick);
+                let pending = Rc::clone(&refresh_pending);
+                spawn_blocking(UiModel::collect, move |model| {
+                    apply_model(&widgets, &model);
+                    pending.set(false);
+                });
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    wire_actions(app, &stack, Rc::clone(&widgets), &window);
+    window.present();
 }
 
 fn build_pages(
@@ -194,12 +205,12 @@ fn build_pages(
     let account_label = body_label();
     auth_card.append(&account_label);
     let account_actions = action_row();
-    let btn_auth_start = gtk4::Button::with_label("Start Auth");
+    let btn_auth_start = gtk4::Button::with_label(tr("Start Auth").as_str());
     btn_auth_start.set_widget_name(ACTION_AUTH_START);
     btn_auth_start.add_css_class("suggested-action");
-    let btn_auth_cancel = gtk4::Button::with_label("Cancel Auth");
+    let btn_auth_cancel = gtk4::Button::with_label(tr("Cancel Auth").as_str());
     btn_auth_cancel.set_widget_name(ACTION_AUTH_CANCEL);
-    let btn_logout = gtk4::Button::with_label("Logout");
+    let btn_logout = gtk4::Button::with_label(tr("Logout").as_str());
     btn_logout.set_widget_name(ACTION_LOGOUT);
     btn_logout.add_css_class("destructive-action");
     account_actions.append(&btn_auth_start);
@@ -211,7 +222,7 @@ fn build_pages(
         "Next step",
         "Start Auth, confirm access in the browser, then paste the code. After success the app automatically starts daemon, enables autostart, and checks integration readiness.",
     ));
-    stack.add_titled(&welcome, Some("welcome"), "Welcome");
+    stack.add_titled(&welcome, Some("welcome"), tr("Welcome").as_str());
 
     let (sync, sync_content) = page_shell();
     sync_content.append(&page_heading("view-refresh-symbolic", "Sync"));
@@ -226,13 +237,13 @@ fn build_pages(
     let daemon_label = body_label();
     daemon_card.append(&daemon_label);
     let daemon_actions = action_row();
-    let btn_start = gtk4::Button::with_label("Start");
+    let btn_start = gtk4::Button::with_label(tr("Start").as_str());
     btn_start.set_widget_name(ACTION_DAEMON_START);
     btn_start.add_css_class("suggested-action");
-    let btn_stop = gtk4::Button::with_label("Stop");
+    let btn_stop = gtk4::Button::with_label(tr("Stop").as_str());
     btn_stop.set_widget_name(ACTION_DAEMON_STOP);
     btn_stop.add_css_class("destructive-action");
-    let btn_restart = gtk4::Button::with_label("Restart");
+    let btn_restart = gtk4::Button::with_label(tr("Restart").as_str());
     btn_restart.set_widget_name(ACTION_DAEMON_RESTART);
     daemon_actions.append(&btn_start);
     daemon_actions.append(&btn_stop);
@@ -243,7 +254,7 @@ fn build_pages(
         "Service lifecycle",
         "Use Start when setting up for the first time, Restart after config changes, and Stop only for troubleshooting.",
     ));
-    stack.add_titled(&sync, Some("sync"), "Sync Status");
+    stack.add_titled(&sync, Some("sync"), tr("Sync Status").as_str());
 
     let (integrations, integrations_content) = page_shell();
     integrations_content.append(&page_heading("folder-symbolic", "Files Integration"));
@@ -261,12 +272,12 @@ fn build_pages(
     integration_commands_box.set_visible(false);
     integrations_card.append(&integration_commands_box);
     let integration_actions = action_row();
-    let btn_check = gtk4::Button::with_label("Re-check");
+    let btn_check = gtk4::Button::with_label(tr("Re-check").as_str());
     btn_check.set_widget_name(ACTION_INTEGRATIONS_CHECK);
     btn_check.add_css_class("suggested-action");
-    let btn_guided = gtk4::Button::with_label("Guided Install");
+    let btn_guided = gtk4::Button::with_label(tr("Guided Install").as_str());
     btn_guided.set_widget_name(ACTION_INTEGRATIONS_GUIDED);
-    let btn_auto = gtk4::Button::with_label("Advanced Auto Install");
+    let btn_auto = gtk4::Button::with_label(tr("Advanced Auto Install").as_str());
     btn_auto.set_widget_name(ACTION_INTEGRATIONS_AUTO);
     btn_auto.add_css_class("destructive-action");
     integration_actions.append(&btn_check);
@@ -279,12 +290,16 @@ fn build_pages(
         "Use Guided Install by default to follow safe host setup steps without elevated automatic actions.",
     ));
     let integration_remove_row = action_row();
-    let btn_remove = gtk4::Button::with_label("Remove integrations");
+    let btn_remove = gtk4::Button::with_label(tr("Remove integrations").as_str());
     btn_remove.set_widget_name(ACTION_INTEGRATIONS_REMOVE);
     btn_remove.add_css_class("destructive-action");
     integration_remove_row.append(&btn_remove);
     integrations_content.append(&integration_remove_row);
-    stack.add_titled(&integrations, Some("integrations"), "Integrations");
+    stack.add_titled(
+        &integrations,
+        Some("integrations"),
+        tr("Integrations").as_str(),
+    );
 
     let (settings, settings_content) = page_shell();
     settings_content.append(&page_heading("emblem-system-symbolic", "Settings"));
@@ -292,14 +307,18 @@ fn build_pages(
         "Review service folders and startup behavior.",
     ));
     let settings_card = section_card();
+    let language_label = section_title("Language");
+    settings_card.append(&language_label);
+    let language_dropdown = build_language_dropdown();
+    settings_card.append(&language_dropdown);
     let settings_label = body_label();
     settings_label.add_css_class("monospace");
     settings_card.append(&settings_label);
     let settings_actions = action_row();
-    let btn_auto_on = gtk4::Button::with_label("Enable autostart");
+    let btn_auto_on = gtk4::Button::with_label(tr("Enable autostart").as_str());
     btn_auto_on.set_widget_name(ACTION_AUTOSTART_ENABLE);
     btn_auto_on.add_css_class("suggested-action");
-    let btn_auto_off = gtk4::Button::with_label("Disable autostart");
+    let btn_auto_off = gtk4::Button::with_label(tr("Disable autostart").as_str());
     btn_auto_off.set_widget_name(ACTION_AUTOSTART_DISABLE);
     btn_auto_off.add_css_class("destructive-action");
     settings_actions.append(&btn_auto_on);
@@ -310,7 +329,7 @@ fn build_pages(
         "Autostart",
         "Enable autostart after successful authorization so the sync daemon starts with your GNOME session.",
     ));
-    stack.add_titled(&settings, Some("settings"), "Settings");
+    stack.add_titled(&settings, Some("settings"), tr("Settings").as_str());
 
     let (diagnostics, diagnostics_content) = page_shell();
     diagnostics_content.append(&page_heading("utilities-terminal-symbolic", "Diagnostics"));
@@ -322,7 +341,7 @@ fn build_pages(
     diagnostics_label.add_css_class("monospace");
     diagnostics_card.append(&diagnostics_label);
     let diagnostics_actions = action_row();
-    let btn_dump = gtk4::Button::with_label("Show diagnostics");
+    let btn_dump = gtk4::Button::with_label(tr("Show diagnostics").as_str());
     btn_dump.set_widget_name(ACTION_DIAGNOSTICS_DUMP);
     btn_dump.add_css_class("suggested-action");
     diagnostics_actions.append(&btn_dump);
@@ -332,7 +351,11 @@ fn build_pages(
         "Support tip",
         "Use Show diagnostics when reporting issues so service and integration state is captured in one snapshot.",
     ));
-    stack.add_titled(&diagnostics, Some("diagnostics"), "Diagnostics");
+    stack.add_titled(
+        &diagnostics,
+        Some("diagnostics"),
+        tr("Diagnostics").as_str(),
+    );
 
     Widgets {
         overview_auth_badge,
@@ -346,6 +369,7 @@ fn build_pages(
         integration_label,
         integration_commands_box,
         settings_label,
+        language_dropdown,
         diagnostics_label,
         auth_start_button: btn_auth_start,
         auth_cancel_button: btn_auth_cancel,
@@ -378,7 +402,7 @@ fn overview_tile(title: &str) -> (gtk4::Box, gtk4::Label) {
     tile.set_hexpand(true);
     tile.add_css_class("overview-tile");
 
-    let title_label = gtk4::Label::new(Some(title));
+    let title_label = gtk4::Label::new(Some(tr(title).as_str()));
     title_label.add_css_class("overview-title");
     title_label.set_halign(gtk4::Align::Start);
     title_label.set_hexpand(true);
@@ -391,7 +415,7 @@ fn overview_tile(title: &str) -> (gtk4::Box, gtk4::Label) {
 }
 
 fn section_title(title: &str) -> gtk4::Label {
-    let label = gtk4::Label::new(Some(title));
+    let label = gtk4::Label::new(Some(tr(title).as_str()));
     label.add_css_class("title-3");
     label.set_halign(gtk4::Align::Start);
     label.set_xalign(0.0);
@@ -436,7 +460,7 @@ fn page_heading(icon_name: &str, title: &str) -> gtk4::Box {
     let icon = gtk4::Image::from_icon_name(icon_name);
     icon.set_pixel_size(20);
     icon.add_css_class("accent");
-    let title_label = gtk4::Label::new(Some(title));
+    let title_label = gtk4::Label::new(Some(tr(title).as_str()));
     title_label.add_css_class("title-2");
     title_label.add_css_class("page-heading");
     title_label.set_halign(gtk4::Align::Start);
@@ -447,7 +471,7 @@ fn page_heading(icon_name: &str, title: &str) -> gtk4::Box {
 }
 
 fn page_description(text: &str) -> gtk4::Label {
-    let label = gtk4::Label::new(Some(text));
+    let label = gtk4::Label::new(Some(tr(text).as_str()));
     label.set_wrap(true);
     label.set_halign(gtk4::Align::Start);
     label.set_xalign(0.0);
@@ -467,7 +491,7 @@ fn note_card(title: &str, text: &str) -> gtk4::Box {
     card.append(&section_title(title));
     let description = body_label();
     description.add_css_class("note-text");
-    description.set_text(text);
+    description.set_text(tr(text).as_str());
     card.append(&description);
     card
 }
@@ -489,14 +513,75 @@ fn action_row() -> gtk4::Box {
 }
 
 fn status_badge() -> gtk4::Label {
-    let label = gtk4::Label::new(Some("Unknown"));
+    let label = gtk4::Label::new(Some(tr("Unknown").as_str()));
     label.add_css_class("pill");
     label.add_css_class("status-unknown");
     label.set_halign(gtk4::Align::End);
     label
 }
 
-fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::ApplicationWindow) {
+fn build_language_dropdown() -> gtk4::DropDown {
+    let model = gtk4::StringList::new(&[]);
+    for label in [tr("System default"), tr("English"), tr("Russian")] {
+        model.append(&label);
+    }
+    let dropdown = gtk4::DropDown::builder().model(&model).build();
+    dropdown.set_selected(language_preference_to_index(
+        load_ui_preferences().language_preference,
+    ));
+    dropdown.set_hexpand(false);
+    dropdown
+}
+
+fn language_preference_to_index(preference: LanguagePreference) -> u32 {
+    match preference {
+        LanguagePreference::System => 0,
+        LanguagePreference::En => 1,
+        LanguagePreference::Ru => 2,
+    }
+}
+
+fn language_preference_from_index(index: u32) -> LanguagePreference {
+    match index {
+        1 => LanguagePreference::En,
+        2 => LanguagePreference::Ru,
+        _ => LanguagePreference::System,
+    }
+}
+
+fn wire_actions(
+    app: &libadwaita::Application,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+    window: &libadwaita::ApplicationWindow,
+) {
+    {
+        let app = app.clone();
+        let stack = stack.clone();
+        let window = window.clone();
+        let widgets = Rc::clone(&widgets);
+        widgets
+            .language_dropdown
+            .connect_selected_notify(move |dropdown| {
+                let preference = language_preference_from_index(dropdown.selected());
+                if load_ui_preferences().language_preference == preference {
+                    return;
+                }
+                match apply_language_preference(preference) {
+                    Ok(true) => {
+                        let current_tab = stack.visible_child_name().map(|name| name.to_string());
+                        window.close();
+                        build_window(&app, current_tab);
+                    }
+                    Ok(false) => {}
+                    Err(err) => show_text_dialog(
+                        &window,
+                        tr("Language change failed").as_str(),
+                        &format!("{}\n{err}", tr("Could not save the selected language.")),
+                    ),
+                }
+            });
+    }
     if let Some(button) = find_button(stack, ACTION_AUTH_START) {
         let widgets = Rc::clone(&widgets);
         let window = window.clone();
@@ -508,32 +593,32 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
             spawn_blocking(
                 || -> AuthStartOutcome {
                     match start_auth_with_daemon_bootstrap() {
-                        Ok(url) => AuthStartOutcome::ShowAuth(url),
+                        Ok(url) => AuthStartOutcome::AuthUrl(url),
                         Err(err) => {
                             let mut message = err.to_string();
                             if !oauth_credentials_configured()
                                 && auto_import_oauth_credentials().unwrap_or(false)
                             {
                                 match start_auth_with_daemon_bootstrap() {
-                                    Ok(url) => return AuthStartOutcome::ShowAuth(url),
+                                    Ok(url) => return AuthStartOutcome::AuthUrl(url),
                                     Err(retry_err) => message = retry_err.to_string(),
                                 }
                             }
                             if auth_env_missing_error(&message) || !oauth_credentials_configured() {
-                                AuthStartOutcome::ShowCredentials(message)
+                                AuthStartOutcome::CredentialsPrompt(message)
                             } else {
-                                AuthStartOutcome::ShowError(message)
+                                AuthStartOutcome::ErrorDialog(message)
                             }
                         }
                     }
                 },
                 move |outcome| {
                     match outcome {
-                        AuthStartOutcome::ShowAuth(url) => {
+                        AuthStartOutcome::AuthUrl(url) => {
                             open_browser_url(&url);
                             prompt_auth_code_dialog(&window, &stack, Rc::clone(&widgets), url);
                         }
-                        AuthStartOutcome::ShowCredentials(message) => {
+                        AuthStartOutcome::CredentialsPrompt(message) => {
                             prompt_oauth_credentials_dialog(
                                 &window,
                                 &stack,
@@ -541,13 +626,15 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                                 &message,
                             );
                         }
-                        AuthStartOutcome::ShowError(message) => {
+                        AuthStartOutcome::ErrorDialog(message) => {
                             show_text_dialog(
                                 &window,
-                                "Start Auth failed",
+                                tr("Start Auth failed").as_str(),
                                 &format!(
-                                    "Could not start authorization.\n\n{}\n\nCheck daemon status and try again.",
-                                    message
+                                    "{}\n\n{}\n\n{}",
+                                    tr("Could not start authorization."),
+                                    message,
+                                    tr("Check daemon status and try again.")
                                 ),
                             );
                         }
@@ -577,11 +664,11 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let dialog = libadwaita::MessageDialog::builder()
                 .transient_for(&window)
-                .heading("Confirm logout")
-                .body("Remove saved credentials and disconnect this account?")
+                .heading(tr("Confirm logout").as_str())
+                .body(tr("Remove saved credentials and disconnect this account?").as_str())
                 .build();
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("logout", "Logout");
+            dialog.add_response("cancel", tr("Cancel").as_str());
+            dialog.add_response("logout", tr("Logout").as_str());
             dialog.set_default_response(Some("cancel"));
             dialog.set_close_response("cancel");
             dialog.set_response_appearance("logout", libadwaita::ResponseAppearance::Destructive);
@@ -592,10 +679,8 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                 let widgets = Rc::clone(&widgets_for_response);
                 spawn_blocking(
                     move || {
-                        if do_logout {
-                            if let Ok(client) = ControlClient::connect() {
-                                let _ = client.logout();
-                            }
+                        if do_logout && let Ok(client) = ControlClient::connect() {
+                            let _ = client.logout();
                         }
                     },
                     move |()| refresh_ui_async(&widgets),
@@ -609,7 +694,9 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let widgets = Rc::clone(&widgets);
             spawn_blocking(
-                || { let _ = run_service_action(ServiceAction::Start); },
+                || {
+                    let _ = run_service_action(ServiceAction::Start);
+                },
                 move |()| refresh_ui_async(&widgets),
             );
         });
@@ -619,7 +706,9 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let widgets = Rc::clone(&widgets);
             spawn_blocking(
-                || { let _ = run_service_action(ServiceAction::Stop); },
+                || {
+                    let _ = run_service_action(ServiceAction::Stop);
+                },
                 move |()| refresh_ui_async(&widgets),
             );
         });
@@ -629,7 +718,9 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let widgets = Rc::clone(&widgets);
             spawn_blocking(
-                || { let _ = run_service_action(ServiceAction::Restart); },
+                || {
+                    let _ = run_service_action(ServiceAction::Restart);
+                },
                 move |()| refresh_ui_async(&widgets),
             );
         });
@@ -648,7 +739,7 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
             *widgets.integration_guided_commands.borrow_mut() = Some(commands.clone());
             widgets
                 .integration_label
-                .set_text("Run these commands in a terminal, then press Re-check.");
+                .set_text(tr("Run these commands in a terminal, then press Re-check.").as_str());
             widgets.integration_label.set_selectable(false);
             render_guided_command_blocks(&widgets.integration_commands_box, &commands);
         });
@@ -662,8 +753,8 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
             let window = window.clone();
             spawn_blocking(
                 || -> Result<(), String> {
-                    ensure_auto_install_permissions().map_err(|e| format!("Automatic install requires write access to the Nautilus extension directory or administrator privileges.\n\n{e}"))?;
-                    run_auto_install().map_err(|e| format!("Could not install integration components:\n{e}"))
+                    ensure_auto_install_permissions().map_err(|e| format!("{}\n\n{e}", tr("Automatic install requires write access to the Nautilus extension directory or administrator privileges.")))?;
+                    run_auto_install().map_err(|e| format!("{}\n{e}", tr("Could not install integration components:")))
                 },
                 move |result| {
                     match result {
@@ -672,11 +763,11 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                             prompt_nautilus_restart_dialog(
                                 &window,
                                 Rc::clone(&widgets),
-                                "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems.",
+                                tr("Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems.").as_str(),
                             );
                         }
                         Err(msg) => {
-                            show_text_dialog(&window, "Auto install failed", &msg);
+                            show_text_dialog(&window, tr("Auto install failed").as_str(), &msg);
                             refresh_ui_async(&widgets);
                         }
                     }
@@ -690,11 +781,14 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let dialog = libadwaita::MessageDialog::builder()
                 .transient_for(&window)
-                .heading("Confirm integration removal")
-                .body("Remove Nautilus extension, FUSE helper, and installed emblem icons?")
+                .heading(tr("Confirm integration removal").as_str())
+                .body(
+                    tr("Remove Nautilus extension, FUSE helper, and installed emblem icons?")
+                        .as_str(),
+                )
                 .build();
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("remove", "Remove");
+            dialog.add_response("cancel", tr("Cancel").as_str());
+            dialog.add_response("remove", tr("Remove").as_str());
             dialog.set_default_response(Some("cancel"));
             dialog.set_close_response("cancel");
             dialog.set_response_appearance("remove", libadwaita::ResponseAppearance::Destructive);
@@ -719,9 +813,11 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                         if let Some(err) = uninstall_err {
                             show_text_dialog(
                                 &window,
-                                "Remove integrations failed",
+                                tr("Remove integrations failed").as_str(),
                                 &format!(
-                                    "Could not remove all integration files:\n{err}\n\nSome system files may require administrator privileges."
+                                    "{}\n{err}\n\n{}",
+                                    tr("Could not remove all integration files:"),
+                                    tr("Some system files may require administrator privileges.")
                                 ),
                             );
                             refresh_ui_async(&widgets);
@@ -730,7 +826,7 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                             prompt_nautilus_restart_dialog(
                                 &window,
                                 Rc::clone(&widgets),
-                                "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays.",
+                                tr("Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays.").as_str(),
                             );
                         } else {
                             refresh_ui_async(&widgets);
@@ -746,7 +842,9 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let widgets = Rc::clone(&widgets);
             spawn_blocking(
-                || { let _ = run_service_action(ServiceAction::EnableAutostart); },
+                || {
+                    let _ = run_service_action(ServiceAction::EnableAutostart);
+                },
                 move |()| refresh_ui_async(&widgets),
             );
         });
@@ -756,7 +854,9 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
         button.connect_clicked(move |_| {
             let widgets = Rc::clone(&widgets);
             spawn_blocking(
-                || { let _ = run_service_action(ServiceAction::DisableAutostart); },
+                || {
+                    let _ = run_service_action(ServiceAction::DisableAutostart);
+                },
                 move |()| refresh_ui_async(&widgets),
             );
         });
@@ -777,13 +877,18 @@ fn wire_actions(stack: &gtk4::Stack, widgets: Rc<Widgets>, window: &libadwaita::
                         model.settings.clone(),
                     ) {
                         Ok(json) => Ok(json),
-                        Err(err) => Err(format!("Failed to build diagnostics report:\n{err}")),
+                        Err(err) => Err(format!(
+                            "{}\n{err}",
+                            tr("Failed to build diagnostics report:")
+                        )),
                     }
                 },
                 move |result| {
                     match result {
-                        Ok(json) => show_text_dialog(&window, "Diagnostics", &json),
-                        Err(msg) => show_text_dialog(&window, "Diagnostics error", &msg),
+                        Ok(json) => show_text_dialog(&window, tr("Diagnostics").as_str(), &json),
+                        Err(msg) => {
+                            show_text_dialog(&window, tr("Diagnostics error").as_str(), &msg)
+                        }
                     }
                     refresh_ui_async(&widgets);
                 },
@@ -854,25 +959,28 @@ fn prompt_auth_code_dialog(
     auth_url: String,
 ) {
     let dialog = gtk4::Dialog::builder()
-        .title("Finish authorization")
+        .title(tr("Finish authorization").as_str())
         .modal(true)
         .transient_for(window)
         .build();
-    dialog.add_button("Open browser again", gtk4::ResponseType::Other(1));
-    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
-    dialog.add_button("Submit code", gtk4::ResponseType::Accept);
+    dialog.add_button(
+        tr("Open browser again").as_str(),
+        gtk4::ResponseType::Other(1),
+    );
+    dialog.add_button(tr("Cancel").as_str(), gtk4::ResponseType::Cancel);
+    dialog.add_button(tr("Submit code").as_str(), gtk4::ResponseType::Accept);
     dialog.set_default_response(gtk4::ResponseType::Accept);
 
     let content = dialog.content_area();
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     let message = gtk4::Label::new(Some(
-        "Authorize access in your browser, then paste the verification code here.",
+        tr("Authorize access in your browser, then paste the verification code here.").as_str(),
     ));
     message.set_wrap(true);
     message.set_halign(gtk4::Align::Start);
     message.set_xalign(0.0);
     let entry = gtk4::Entry::new();
-    entry.set_placeholder_text(Some("Paste verification code"));
+    entry.set_placeholder_text(Some(tr("Paste verification code").as_str()));
     entry.set_activates_default(true);
     body.append(&message);
     body.append(&entry);
@@ -891,25 +999,34 @@ fn prompt_auth_code_dialog(
                 let stack = stack_for_response.clone();
                 let window = window_for_response.clone();
                 spawn_blocking(
-                    move || -> Result<bool, String> {
-                        submit_auth_code_with_daemon_bootstrap(&code)
-                            .map_err(|e| e.to_string())?;
+                    move || -> Result<PostAuthOutcome, String> {
+                        submit_auth_code_with_daemon_bootstrap(&code).map_err(|e| e.to_string())?;
                         Ok(run_post_auth_steps())
                     },
                     move |result| {
                         match result {
-                            Ok(integration_needs_setup) => {
-                                if integration_needs_setup {
+                            Ok(outcome) => {
+                                if outcome.integration_needs_setup {
                                     stack.set_visible_child_name("integrations");
                                 } else {
                                     stack.set_visible_child_name("sync");
+                                }
+                                if let Some(warning) = outcome.warning {
+                                    show_text_dialog(
+                                        &window,
+                                        tr("Authorization completed with warnings").as_str(),
+                                        &warning,
+                                    );
                                 }
                             }
                             Err(msg) => {
                                 show_text_dialog(
                                     &window,
-                                    "Authorization failed",
-                                    &format!("Failed to submit verification code:\n{msg}"),
+                                    tr("Authorization failed").as_str(),
+                                    &format!(
+                                        "{}\n{msg}",
+                                        tr("Failed to submit verification code:")
+                                    ),
                                 );
                             }
                         }
@@ -931,12 +1048,45 @@ fn prompt_auth_code_dialog(
     dialog.present();
 }
 
-fn run_post_auth_steps() -> bool {
-    let _ = run_service_action(ServiceAction::Restart)
-        .or_else(|_| run_service_action(ServiceAction::Start));
-    let _ = run_service_action(ServiceAction::EnableAutostart);
+fn run_post_auth_steps() -> PostAuthOutcome {
+    let mut warnings = Vec::new();
+    if let Err(err) = run_service_action(ServiceAction::Restart)
+        .or_else(|_| run_service_action(ServiceAction::Start))
+    {
+        warnings.push(format!(
+            "{}\n{err}",
+            tr("Could not restart or start the sync service:")
+        ));
+    }
+    match query_daemon_service_status() {
+        Ok(status) if matches!(status.normalized(), "active" | "activating" | "reloading") => {}
+        Ok(status) => warnings.push(format!(
+            "{}\n{}",
+            tr("The sync service is not active yet."),
+            status.normalized()
+        )),
+        Err(err) => warnings.push(format!(
+            "{}\n{err}",
+            tr("Could not verify sync service status:")
+        )),
+    }
+    if let Err(err) = run_service_action(ServiceAction::EnableAutostart) {
+        warnings.push(format!("{}\n{err}", tr("Could not enable autostart:")));
+    }
     let model = UiModel::collect();
-    !matches!(model.integration_status, crate::ui_model::UiStatus::Ready)
+    PostAuthOutcome {
+        integration_needs_setup: !matches!(
+            model.integration_status,
+            crate::ui_model::UiStatus::Ready
+        ),
+        warning: (!warnings.is_empty()).then(|| {
+            format!(
+                "{}\n\n{}",
+                tr("Authorization succeeded, but some follow-up steps need attention:"),
+                warnings.join("\n\n")
+            )
+        }),
+    }
 }
 
 fn show_text_dialog(window: &libadwaita::ApplicationWindow, title: &str, text: &str) {
@@ -945,7 +1095,7 @@ fn show_text_dialog(window: &libadwaita::ApplicationWindow, title: &str, text: &
         .heading(title)
         .body(text)
         .build();
-    dialog.add_response("ok", "OK");
+    dialog.add_response("ok", tr("OK").as_str());
     dialog.set_default_response(Some("ok"));
     dialog.set_close_response("ok");
     dialog.connect_response(Some("ok"), |dialog, _| {
@@ -961,11 +1111,11 @@ fn prompt_nautilus_restart_dialog(
 ) {
     let dialog = libadwaita::MessageDialog::builder()
         .transient_for(window)
-        .heading("Restart Files now?")
+        .heading(tr("Restart Files now?").as_str())
         .body(reason)
         .build();
-    dialog.add_response("later", "Not now");
-    dialog.add_response("restart", "Restart Files");
+    dialog.add_response("later", tr("Not now").as_str());
+    dialog.add_response("restart", tr("Restart Files").as_str());
     dialog.set_default_response(Some("later"));
     dialog.set_close_response("later");
     dialog.set_response_appearance("restart", libadwaita::ResponseAppearance::Suggested);
@@ -980,14 +1130,14 @@ fn prompt_nautilus_restart_dialog(
                 if do_restart {
                     restart_nautilus()
                         .err()
-                        .map(|e| format!("Could not restart Nautilus:\n{e}"))
+                        .map(|e| format!("{}\n{e}", tr("Could not restart Nautilus:")))
                 } else {
                     None
                 }
             },
             move |err_msg| {
                 if let Some(msg) = err_msg {
-                    show_text_dialog(&window, "Restart Files failed", &msg);
+                    show_text_dialog(&window, tr("Restart Files failed").as_str(), &msg);
                 }
                 refresh_ui_async(&w);
             },
@@ -1022,18 +1172,20 @@ fn prompt_oauth_credentials_dialog(
     error_message: &str,
 ) {
     let dialog = gtk4::Dialog::builder()
-        .title("OAuth credentials required")
+        .title(tr("OAuth credentials required").as_str())
         .modal(true)
         .transient_for(window)
         .build();
-    dialog.add_button("Cancel", gtk4::ResponseType::Cancel);
-    dialog.add_button("Save and retry", gtk4::ResponseType::Accept);
+    dialog.add_button(tr("Cancel").as_str(), gtk4::ResponseType::Cancel);
+    dialog.add_button(tr("Save and retry").as_str(), gtk4::ResponseType::Accept);
     dialog.set_default_response(gtk4::ResponseType::Accept);
     let content = dialog.content_area();
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     let message = gtk4::Label::new(Some(&format!(
-        "Authorization cannot start because OAuth credentials are missing in daemon service.\n\n{}\n\nEnter Yandex OAuth client id and secret:",
-        error_message
+        "{}\n\n{}\n\n{}",
+        tr("Authorization cannot start because OAuth credentials are missing in daemon service."),
+        error_message,
+        tr("Enter Yandex OAuth client id and secret:")
     )));
     message.set_wrap(true);
     message.set_halign(gtk4::Align::Start);
@@ -1063,9 +1215,13 @@ fn prompt_oauth_credentials_dialog(
             spawn_blocking(
                 move || -> Result<String, String> {
                     configure_oauth_credentials(&id, &secret)
-                        .map_err(|e| format!("Could not save OAuth credentials:\n{e}"))?;
-                    start_auth_with_daemon_bootstrap()
-                        .map_err(|e| format!("Could not start authorization after saving credentials:\n{e}"))
+                        .map_err(|e| format!("{}\n{e}", tr("Could not save OAuth credentials:")))?;
+                    start_auth_with_daemon_bootstrap().map_err(|e| {
+                        format!(
+                            "{}\n{e}",
+                            tr("Could not start authorization after saving credentials:")
+                        )
+                    })
                 },
                 move |result| {
                     match result {
@@ -1074,7 +1230,7 @@ fn prompt_oauth_credentials_dialog(
                             prompt_auth_code_dialog(&window, &stack, Rc::clone(&w), url);
                         }
                         Err(msg) => {
-                            show_text_dialog(&window, "Auth error", &msg);
+                            show_text_dialog(&window, tr("Auth error").as_str(), &msg);
                         }
                     }
                     refresh_ui_async(&w);
@@ -1102,7 +1258,7 @@ fn apply_model(widgets: &Widgets, model: &UiModel) {
     if let Some(commands) = widgets.integration_guided_commands.borrow().as_ref() {
         widgets
             .integration_label
-            .set_text("Run these commands in a terminal, then press Re-check.");
+            .set_text(tr("Run these commands in a terminal, then press Re-check.").as_str());
         widgets.integration_label.set_selectable(false);
         if widgets.integration_commands_box.first_child().is_none() {
             render_guided_command_blocks(&widgets.integration_commands_box, commands);
@@ -1121,18 +1277,30 @@ fn apply_model(widgets: &Widgets, model: &UiModel) {
         }
     }
     widgets.settings_label.set_text(&format!(
-        "Sync folder: {}\nCache folder: {}\nRemote root: {}\nCloud poll interval (s): {}\nWorker loop (ms): {}\nLocal watcher enabled: {}\nAutostart: {}",
+        "{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}",
+        tr("Sync folder"),
         model.settings.sync_root,
+        tr("Cache folder"),
         model.settings.cache_root,
+        tr("Remote root"),
         model.settings.remote_root,
+        tr("Cloud poll interval (s)"),
         model.settings.cloud_poll_secs,
+        tr("Worker loop (ms)"),
         model.settings.worker_loop_ms,
-        model.settings.local_watcher_enabled,
-        model.settings.autostart
+        tr("Local watcher enabled"),
+        localized_bool(model.settings.local_watcher_enabled),
+        tr("Autostart"),
+        localize_autostart_state(model.settings.autostart.as_str())
     ));
     widgets.diagnostics_label.set_text(&format!(
-        "Daemon status: {:?}\nAuth status: {:?}\nIntegrations status: {:?}",
-        model.daemon_status, model.auth_status, model.integration_status
+        "{}: {}\n{}: {}\n{}: {}",
+        tr("Daemon status"),
+        localized_ui_status(model.daemon_status),
+        tr("Auth status"),
+        localized_ui_status(model.auth_status),
+        tr("Integrations status"),
+        localized_ui_status(model.integration_status)
     ));
     widgets.settings_label.set_selectable(false);
     widgets.diagnostics_label.set_selectable(false);
@@ -1144,6 +1312,29 @@ fn refresh_ui_async(widgets: &Rc<Widgets>) {
     spawn_blocking(UiModel::collect, move |model| {
         apply_model(&widgets, &model);
     });
+}
+
+fn localized_bool(value: bool) -> String {
+    if value { tr("Yes") } else { tr("No") }
+}
+
+fn localize_autostart_state(state: &str) -> String {
+    match state {
+        "enabled" | "enabled-runtime" | "linked" | "linked-runtime" => tr("Enabled"),
+        "disabled" => tr("Disabled"),
+        "masked" => tr("Masked"),
+        "unknown" => tr("Unknown"),
+        other => other.to_string(),
+    }
+}
+
+fn localized_ui_status(status: crate::ui_model::UiStatus) -> String {
+    match status {
+        crate::ui_model::UiStatus::Ready => tr("Ready"),
+        crate::ui_model::UiStatus::NeedsSetup => tr("Needs setup"),
+        crate::ui_model::UiStatus::Error => tr("Error"),
+        crate::ui_model::UiStatus::Unknown => tr("Unknown"),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1242,19 +1433,19 @@ fn update_badge(label: &gtk4::Label, status: crate::ui_model::UiStatus) {
     label.remove_css_class("status-unknown");
     match status {
         crate::ui_model::UiStatus::Ready => {
-            label.set_text("Ready");
+            label.set_text(tr("Ready").as_str());
             label.add_css_class("status-ready");
         }
         crate::ui_model::UiStatus::NeedsSetup => {
-            label.set_text("Needs setup");
+            label.set_text(tr("Needs setup").as_str());
             label.add_css_class("status-needs");
         }
         crate::ui_model::UiStatus::Error => {
-            label.set_text("Error");
+            label.set_text(tr("Error").as_str());
             label.add_css_class("status-error");
         }
         crate::ui_model::UiStatus::Unknown => {
-            label.set_text("Unknown");
+            label.set_text(tr("Unknown").as_str());
             label.add_css_class("status-unknown");
         }
     }
@@ -1298,7 +1489,7 @@ fn render_guided_command_blocks(container: &gtk4::Box, commands: &[String]) {
 
         let copy_button = gtk4::Button::from_icon_name("edit-copy-symbolic");
         copy_button.add_css_class("flat");
-        copy_button.set_tooltip_text(Some("Copy command"));
+        copy_button.set_tooltip_text(Some(tr("Copy command").as_str()));
         copy_button.set_margin_end(8);
         copy_button.set_margin_top(4);
         copy_button.set_margin_bottom(4);
@@ -1313,13 +1504,13 @@ fn render_guided_command_blocks(container: &gtk4::Box, commands: &[String]) {
     }
 }
 
-fn guided_step_title(index: usize) -> &'static str {
+fn guided_step_title(index: usize) -> String {
     match index {
-        0 => "Install/update Nautilus extension",
-        1 => "Install/update FUSE helper",
-        2 => "Restart Files",
-        3 => "Re-check integration status",
-        _ => "Run command",
+        0 => tr("Install/update Nautilus extension"),
+        1 => tr("Install/update FUSE helper"),
+        2 => tr("Restart Files"),
+        3 => tr("Re-check integration status"),
+        _ => tr("Run command"),
     }
 }
 

@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use tokio::sync::mpsc;
+use yadisk_integrations::i18n::{product_name, sync_with_saved_language, tr};
 use yadisk_integrations::ids::DBUS_NAME_SYNC;
+
+use crate::daemon::resolve_sync_root_from_env;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraySyncState {
@@ -117,7 +120,8 @@ impl ksni::Tray for YadiskTray {
     }
 
     fn title(&self) -> String {
-        "Yandex Disk".to_string()
+        sync_with_saved_language();
+        product_name().to_string()
     }
 
     fn icon_name(&self) -> String {
@@ -130,9 +134,26 @@ impl ksni::Tray for YadiskTray {
 
     fn menu(&self) -> Vec<ksni::menu::MenuItem<Self>> {
         use ksni::menu::StandardItem;
+        sync_with_saved_language();
         vec![
             StandardItem {
-                label: "Quit".to_string(),
+                label: tr("Open Yandex Disk"),
+                activate: Box::new(|_tray: &mut Self| {
+                    launch_ui_from_tray();
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: tr("Open Yandex Disk Folder"),
+                activate: Box::new(|_tray: &mut Self| {
+                    open_sync_root_from_tray();
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: tr("Quit"),
                 activate: Box::new(|tray: &mut Self| {
                     let _ = tray.quit_tx.send(());
                 }),
@@ -140,6 +161,76 @@ impl ksni::Tray for YadiskTray {
             }
             .into(),
         ]
+    }
+}
+
+fn launch_ui_from_tray() {
+    let mut last_error: Option<String> = None;
+    for candidate in ui_launch_candidates() {
+        match std::process::Command::new(&candidate).spawn() {
+            Ok(_) => return,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                last_error = Some(format!("launch target not found: {}", candidate.display()));
+            }
+            Err(err) => {
+                eprintln!(
+                    "[yadiskd] warning: failed to launch UI from tray via {}: {err}",
+                    candidate.display()
+                );
+                return;
+            }
+        }
+    }
+
+    if let Some(err) = last_error {
+        eprintln!("[yadiskd] warning: failed to launch UI from tray: {err}");
+    }
+}
+
+fn ui_launch_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut push_candidate = |candidate: PathBuf| {
+        if !candidate.as_os_str().is_empty()
+            && !candidates.iter().any(|existing| existing == &candidate)
+        {
+            candidates.push(candidate);
+        }
+    };
+
+    if let Ok(path) = std::env::var("YADISK_UI_BIN")
+        && !path.trim().is_empty()
+    {
+        push_candidate(PathBuf::from(path));
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        push_candidate(exe_dir.join("yadisk-ui"));
+    }
+    push_candidate(PathBuf::from("yadisk-ui"));
+    candidates
+}
+
+fn open_sync_root_from_tray() {
+    let path = match resolve_sync_root_from_env() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[yadiskd] warning: failed to resolve sync root for tray: {err}");
+            return;
+        }
+    };
+    if !path.exists() {
+        eprintln!(
+            "[yadiskd] warning: tray sync root does not exist: {}",
+            path.display()
+        );
+        return;
+    }
+    if let Err(err) = std::process::Command::new("xdg-open").arg(&path).spawn() {
+        eprintln!(
+            "[yadiskd] warning: failed to open sync root from tray ({}): {err}",
+            path.display()
+        );
     }
 }
 
@@ -152,5 +243,14 @@ mod tests {
         assert_eq!(TraySyncState::Normal.icon_name(), "normal");
         assert_eq!(TraySyncState::Syncing.icon_name(), "syncing");
         assert_eq!(TraySyncState::Error.icon_name(), "error");
+    }
+
+    #[test]
+    fn ui_launch_candidates_include_path_fallback() {
+        assert!(
+            ui_launch_candidates()
+                .iter()
+                .any(|candidate| candidate == &PathBuf::from("yadisk-ui"))
+        );
     }
 }

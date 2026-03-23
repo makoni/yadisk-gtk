@@ -151,7 +151,10 @@ mod tests {
     fn conflict_paths_are_unique_for_same_timestamp() {
         let path1 = conflict_path("/Docs/A.txt", 100);
         let path2 = conflict_path("/Docs/A.txt", 100);
-        assert_ne!(path1, path2, "two conflict paths with same timestamp must differ");
+        assert_ne!(
+            path1, path2,
+            "two conflict paths with same timestamp must differ"
+        );
         assert!(path1.starts_with("/Docs/A (conflict 100-"));
         assert!(path2.starts_with("/Docs/A (conflict 100-"));
     }

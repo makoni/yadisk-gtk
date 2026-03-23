@@ -3,6 +3,7 @@ use crate::integration_control::{IntegrationStatus, detect_integration_status};
 use crate::service_control::{ServiceStatus, query_daemon_service_status};
 use crate::settings::{SettingsSnapshot, read_settings_snapshot};
 use keyring::Entry;
+use yadisk_integrations::i18n::tr;
 use yadisk_integrations::ids::KEYRING_SERVICE;
 
 const TOKEN_KEY: &str = "yadisk_token";
@@ -49,7 +50,10 @@ impl UiModel {
                 .map_or_else(detect_local_auth_state, |snapshot| {
                     (
                         map_auth_control_status(snapshot.auth_state.as_str()),
-                        format!("{}: {}", snapshot.auth_state, snapshot.auth_message),
+                        format_control_summary(
+                            snapshot.auth_state.as_str(),
+                            localize_auth_message(snapshot.auth_message.as_str()),
+                        ),
                     )
                 });
         let daemon_status = control
@@ -60,11 +64,14 @@ impl UiModel {
         let integration_status = map_integration_status(&integrations);
 
         let daemon_summary = if let Some(snapshot) = &control {
-            format!("{}: {}", snapshot.daemon_state, snapshot.daemon_message)
+            format_control_summary(
+                snapshot.daemon_state.as_str(),
+                localize_daemon_message(snapshot.daemon_message.as_str()),
+            )
         } else if let Some(service) = &service {
-            format!("{}: user service state", service.state)
+            format_control_summary(service.state.as_str(), tr("User service state"))
         } else {
-            "unknown: service status is unavailable".to_string()
+            format_control_summary("unknown", tr("Service status is unavailable"))
         };
         let integration_summary = integrations.summary_message();
 
@@ -127,7 +134,7 @@ fn detect_local_auth_state() -> (UiStatus, String) {
     {
         return (
             UiStatus::Ready,
-            "authorized: YADISK_TOKEN environment variable is set".to_string(),
+            format_control_summary("authorized", tr("YADISK_TOKEN environment variable is set")),
         );
     }
 
@@ -142,12 +149,12 @@ fn detect_local_auth_state() -> (UiStatus, String) {
         return if has_portal_token {
             (
                 UiStatus::Ready,
-                "authorized: saved token found in portal storage".to_string(),
+                format_control_summary("authorized", tr("Saved token found in portal storage")),
             )
         } else {
             (
                 UiStatus::NeedsSetup,
-                "unauthorized: token is missing in portal storage".to_string(),
+                format_control_summary("unauthorized", tr("Token is missing in portal storage")),
             )
         };
     }
@@ -157,7 +164,10 @@ fn detect_local_auth_state() -> (UiStatus, String) {
         Err(err) => {
             return (
                 UiStatus::Error,
-                format!("error: failed to access keyring entry ({err})"),
+                format_control_summary(
+                    "error",
+                    format!("{} ({err})", tr("Failed to access keyring entry")),
+                ),
             );
         }
     };
@@ -165,16 +175,67 @@ fn detect_local_auth_state() -> (UiStatus, String) {
     match entry.get_password() {
         Ok(_) => (
             UiStatus::Ready,
-            "authorized: saved token found in keyring".to_string(),
+            format_control_summary("authorized", tr("Saved token found in keyring")),
         ),
         Err(keyring::Error::NoEntry) => (
             UiStatus::NeedsSetup,
-            "unauthorized: token is missing in keyring".to_string(),
+            format_control_summary("unauthorized", tr("Token is missing in keyring")),
         ),
         Err(err) => (
             UiStatus::Error,
-            format!("error: failed to read keyring token ({err})"),
+            format_control_summary(
+                "error",
+                format!("{} ({err})", tr("Failed to read keyring token")),
+            ),
         ),
+    }
+}
+
+fn format_control_summary(state: &str, message: String) -> String {
+    format!("{}: {}", localize_state_label(state), message)
+}
+
+fn localize_state_label(state: &str) -> String {
+    match state {
+        "authorized" => tr("Authorized"),
+        "unauthorized" => tr("Unauthorized"),
+        "pending" => tr("Pending"),
+        "cancelled" => tr("Cancelled"),
+        "running" => tr("Running"),
+        "busy" => tr("Busy"),
+        "starting" => tr("Starting"),
+        "stopping" => tr("Stopping"),
+        "inactive" => tr("Inactive"),
+        "stopped" => tr("Stopped"),
+        "needs_setup" => tr("Needs setup"),
+        "active" => tr("Active"),
+        "activating" => tr("Activating"),
+        "reloading" => tr("Reloading"),
+        "deactivating" => tr("Deactivating"),
+        "failed" => tr("Failed"),
+        "error" => tr("Error"),
+        "unknown" => tr("Unknown"),
+        other => other.to_string(),
+    }
+}
+
+fn localize_auth_message(message: &str) -> String {
+    match message {
+        "saved token found" => tr("Saved token found"),
+        "token is missing" => tr("Token is missing"),
+        "token saved" => tr("Token saved"),
+        "token removed" => tr("Token removed"),
+        "auth request cancelled" => tr("Authorization request cancelled"),
+        other => other.to_string(),
+    }
+}
+
+fn localize_daemon_message(message: &str) -> String {
+    match message {
+        "idle" => tr("Idle"),
+        "queued or active operations" => tr("Queued or active operations"),
+        "sync engine reported an error" => tr("Sync engine reported an error"),
+        other => other.to_string(),
     }
 }
 

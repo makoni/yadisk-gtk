@@ -1,0 +1,555 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: yadisk-gtk\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A local operation failed. Please try again."
+msgstr ""
+
+msgid "Account"
+msgstr ""
+
+msgid "Activating"
+msgstr ""
+
+msgid "Active"
+msgstr ""
+
+msgid "Advanced Auto Install"
+msgstr ""
+
+msgid "All integration components are present"
+msgstr ""
+
+msgid "Auth error"
+msgstr ""
+
+msgid "Auth status"
+msgstr ""
+
+msgid "Authorization"
+msgstr ""
+
+msgid "Authorization cancelled"
+msgstr ""
+
+msgid "Authorization cannot start because OAuth credentials are missing in daemon service."
+msgstr ""
+
+msgid "Authorization completed successfully. You can return to the app."
+msgstr ""
+
+msgid "Authorization error"
+msgstr ""
+
+msgid "Authorization failed"
+msgstr ""
+
+msgid "Authorization completed with warnings"
+msgstr ""
+
+msgid "Authorization succeeded, but some follow-up steps need attention:"
+msgstr ""
+
+msgid "Authorization request cancelled"
+msgstr ""
+
+msgid "Authorization timed out"
+msgstr ""
+
+msgid "Authorize access in your browser, then paste the verification code here."
+msgstr ""
+
+msgid "Authorized"
+msgstr ""
+
+msgid "Auto install failed"
+msgstr ""
+
+msgid "Automatic install requires write access to the Nautilus extension directory or administrator privileges."
+msgstr ""
+
+msgid "Autostart"
+msgstr ""
+
+msgid "Busy"
+msgstr ""
+
+msgid "Cache folder"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "Cancel Auth"
+msgstr ""
+
+msgid "Cancelled"
+msgstr ""
+
+msgid "Check Nautilus/FUSE integration and run setup helpers."
+msgstr ""
+
+msgid "Check daemon status and try again."
+msgstr ""
+
+msgid "Cloud poll interval (s)"
+msgstr ""
+
+msgid "Confirm integration removal"
+msgstr ""
+
+msgid "Confirm logout"
+msgstr ""
+
+msgid "Connect Yandex Disk"
+msgstr ""
+
+msgid "Connect your account and manage authorization from one place."
+msgstr ""
+
+msgid "Continue"
+msgstr ""
+
+msgid "Continue?"
+msgstr ""
+
+msgid "Copy command"
+msgstr ""
+
+msgid "Could not install integration components:"
+msgstr ""
+
+msgid "Could not open the browser"
+msgstr ""
+
+msgid "Could not enable autostart:"
+msgstr ""
+
+msgid "Could not remove all integration files:"
+msgstr ""
+
+msgid "Could not restart or start the sync service:"
+msgstr ""
+
+msgid "Could not restart Nautilus:"
+msgstr ""
+
+msgid "Could not save OAuth credentials:"
+msgstr ""
+
+msgid "Could not save the selected language."
+msgstr ""
+
+msgid "Could not verify sync service status:"
+msgstr ""
+
+msgid "Could not start authorization after saving credentials:"
+msgstr ""
+
+msgid "Could not start authorization."
+msgstr ""
+
+msgid "Daemon"
+msgstr ""
+
+msgid "Daemon status"
+msgstr ""
+
+msgid "Deactivating"
+msgstr ""
+
+msgid "Diagnostics"
+msgstr ""
+
+msgid "Diagnostics error"
+msgstr ""
+
+msgid "Disable autostart"
+msgstr ""
+
+msgid "Disabled"
+msgstr ""
+
+msgid "Emblems"
+msgstr ""
+
+msgid "Enable autostart"
+msgstr ""
+
+msgid "Enable autostart after successful authorization so the sync daemon starts with your GNOME session."
+msgstr ""
+
+msgid "Enabled"
+msgstr ""
+
+msgid "English"
+msgstr ""
+
+msgid "Enter Yandex OAuth client id and secret:"
+msgstr ""
+
+msgid "Enter code manually"
+msgstr ""
+
+msgid "Enter the verification code:"
+msgstr ""
+
+msgid "Error"
+msgstr ""
+
+msgid "FUSE helper"
+msgstr ""
+
+msgid "Failed"
+msgstr ""
+
+msgid "Failed to access keyring entry"
+msgstr ""
+
+msgid "Failed to build diagnostics report:"
+msgstr ""
+
+msgid "Failed to read keyring token"
+msgstr ""
+
+msgid "Failed to submit verification code:"
+msgstr ""
+
+msgid "Files Integration"
+msgstr ""
+
+msgid "Finish authorization"
+msgstr ""
+
+msgid "Guided Install"
+msgstr ""
+
+msgid "Idle"
+msgstr ""
+
+msgid "Inactive"
+msgstr ""
+
+msgid "Input/output error"
+msgstr ""
+
+msgid "Install/update FUSE helper"
+msgstr ""
+
+msgid "Install/update Nautilus extension"
+msgstr ""
+
+msgid "Integration state"
+msgstr ""
+
+msgid "Integrations"
+msgstr ""
+
+msgid "Integrations status"
+msgstr ""
+
+msgid "Language"
+msgstr ""
+
+msgid "Language change failed"
+msgstr ""
+
+msgid "Local watcher enabled"
+msgstr ""
+
+msgid "Logout"
+msgstr ""
+
+msgid "Manage the user service and check current daemon state."
+msgstr ""
+
+msgid "Manual code entry"
+msgstr ""
+
+msgid "Masked"
+msgstr ""
+
+msgid "Missing components"
+msgstr ""
+
+msgid "Nautilus extension"
+msgstr ""
+
+msgid "Needs setup"
+msgstr ""
+
+msgid "Next step"
+msgstr ""
+
+msgid "No"
+msgstr ""
+
+msgid "No callback was received from the browser. Confirm the sign-in and try again."
+msgstr ""
+
+msgid "Not now"
+msgstr ""
+
+msgid "OAuth code exchange failed"
+msgstr ""
+
+msgid "OAuth credentials required"
+msgstr ""
+
+msgid "OK"
+msgstr ""
+
+msgid "Open Yandex Disk"
+msgstr ""
+
+msgid "Open Yandex Disk Folder"
+msgstr ""
+
+msgid "Open browser again"
+msgstr ""
+
+msgid "Open this URL and paste the code:"
+msgstr ""
+
+msgid "Paste verification code"
+msgstr ""
+
+msgid "Pending"
+msgstr ""
+
+msgid "Queued or active operations"
+msgstr ""
+
+msgid "Quit"
+msgstr ""
+
+msgid "Re-check"
+msgstr ""
+
+msgid "Re-check integration status"
+msgstr ""
+
+msgid "Ready"
+msgstr ""
+
+msgid "Recommendation"
+msgstr ""
+
+msgid "Refresh status"
+msgstr ""
+
+msgid "Reloading"
+msgstr ""
+
+msgid "Remote root"
+msgstr ""
+
+msgid "Remove"
+msgstr ""
+
+msgid "Remove Nautilus extension, FUSE helper, and installed emblem icons?"
+msgstr ""
+
+msgid "Remove integrations"
+msgstr ""
+
+msgid "Remove integrations failed"
+msgstr ""
+
+msgid "Remove saved credentials and disconnect this account?"
+msgstr ""
+
+msgid "Restart"
+msgstr ""
+
+msgid "Restart Files"
+msgstr ""
+
+msgid "Restart Files failed"
+msgstr ""
+
+msgid "Restart Files now?"
+msgstr ""
+
+msgid "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems."
+msgstr ""
+
+msgid "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays."
+msgstr ""
+
+msgid "Retry"
+msgstr ""
+
+msgid "Review service folders and startup behavior."
+msgstr ""
+
+msgid "Run command"
+msgstr ""
+
+msgid "Run these commands in a terminal, then press Re-check."
+msgstr ""
+
+msgid "Running"
+msgstr ""
+
+msgid "Russian"
+msgstr ""
+
+msgid "Save and retry"
+msgstr ""
+
+msgid "Saved token found"
+msgstr ""
+
+msgid "Saved token found in keyring"
+msgstr ""
+
+msgid "Saved token found in portal storage"
+msgstr ""
+
+msgid "Service lifecycle"
+msgstr ""
+
+msgid "Service status"
+msgstr ""
+
+msgid "Service status is unavailable"
+msgstr ""
+
+msgid "Settings"
+msgstr ""
+
+msgid "Show diagnostics"
+msgstr ""
+
+msgid "Some system files may require administrator privileges."
+msgstr ""
+
+msgid "Start"
+msgstr ""
+
+msgid "Start Auth"
+msgstr ""
+
+msgid "Start Auth failed"
+msgstr ""
+
+msgid "Start Auth, confirm access in the browser, then paste the code. After success the app automatically starts daemon, enables autostart, and checks integration readiness."
+msgstr ""
+
+msgid "Starting"
+msgstr ""
+
+msgid "Stop"
+msgstr ""
+
+msgid "Stopped"
+msgstr ""
+
+msgid "Stopping"
+msgstr ""
+
+msgid "Submit code"
+msgstr ""
+
+msgid "Runtime status summary and diagnostics export helper."
+msgstr ""
+
+msgid "Support tip"
+msgstr ""
+
+msgid "Switch to manual verification code entry?"
+msgstr ""
+
+msgid "Sync"
+msgstr ""
+
+msgid "Sync Status"
+msgstr ""
+
+msgid "Sync engine reported an error"
+msgstr ""
+
+msgid "Sync folder"
+msgstr ""
+
+msgid "System default"
+msgstr ""
+
+msgid "The OpenURI portal is unavailable. You can retry or enter the code manually."
+msgstr ""
+
+msgid "The authorization flow failed."
+msgstr ""
+
+msgid "The authorization flow was cancelled by the user."
+msgstr ""
+
+msgid "The sync service is not active yet."
+msgstr ""
+
+msgid "The service did not return the code parameter. Retry sign-in or enter the code manually."
+msgstr ""
+
+msgid "Token is missing"
+msgstr ""
+
+msgid "Token is missing in keyring"
+msgstr ""
+
+msgid "Token is missing in portal storage"
+msgstr ""
+
+msgid "Token removed"
+msgstr ""
+
+msgid "Token saved"
+msgstr ""
+
+msgid "Unauthorized"
+msgstr ""
+
+msgid "Unknown"
+msgstr ""
+
+msgid "Use Guided Install by default to follow safe host setup steps without elevated automatic actions."
+msgstr ""
+
+msgid "Use Show diagnostics when reporting issues so service and integration state is captured in one snapshot."
+msgstr ""
+
+msgid "Use Start when setting up for the first time, Restart after config changes, and Stop only for troubleshooting."
+msgstr ""
+
+msgid "User service state"
+msgstr ""
+
+msgid "Verification code"
+msgstr ""
+
+msgid "Verification code was not received"
+msgstr ""
+
+msgid "Welcome"
+msgstr ""
+
+msgid "Worker loop (ms)"
+msgstr ""
+
+msgid "YADISK_TOKEN environment variable is set"
+msgstr ""
+
+msgid "Yandex Disk connected"
+msgstr ""
+
+msgid "Yes"
+msgstr ""
+
+msgid "You can return to the app."
+msgstr ""
+
+msgid "Your system browser will open for sign-in."
+msgstr ""

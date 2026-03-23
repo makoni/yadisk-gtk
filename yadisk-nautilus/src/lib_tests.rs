@@ -102,6 +102,9 @@ fn from_dbus_maps_explicit_cloud_only() {
 #[test]
 fn from_dbus_unknown_value_defaults_to_cloud_only() {
     // Unknown D-Bus state values should default to CloudOnly (with a warning logged)
-    assert_eq!(SyncUiState::from_dbus("unknown_state"), SyncUiState::CloudOnly);
+    assert_eq!(
+        SyncUiState::from_dbus("unknown_state"),
+        SyncUiState::CloudOnly
+    );
     assert_eq!(SyncUiState::from_dbus(""), SyncUiState::CloudOnly);
 }

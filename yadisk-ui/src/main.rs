@@ -21,6 +21,7 @@ use service_control::{
 };
 use settings::read_settings_snapshot;
 use ui_model::{UiModel, UiStatus};
+use yadisk_integrations::i18n;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CliMode {
@@ -164,7 +165,10 @@ fn main() -> anyhow::Result<()> {
         | CliMode::DisableAutostart
         | CliMode::InstallIntegrationsGuided
         | CliMode::InstallIntegrationsAuto => unreachable!("handled above and returned early"),
-        CliMode::Status | CliMode::CheckIntegrations | CliMode::ShowSettings | CliMode::Diagnostics => {}
+        CliMode::Status
+        | CliMode::CheckIntegrations
+        | CliMode::ShowSettings
+        | CliMode::Diagnostics => {}
         CliMode::Gtk
         | CliMode::GtkWelcome
         | CliMode::GtkSync
@@ -308,6 +312,7 @@ fn print_help() {
 
 #[cfg(feature = "gtk-ui")]
 fn launch_gtk(start_tab: Option<String>) -> anyhow::Result<()> {
+    i18n::init();
     gtk_app::run(start_tab)
 }
 

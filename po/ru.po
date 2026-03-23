@@ -1,0 +1,556 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: yadisk-gtk\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A local operation failed. Please try again."
+msgstr "Локальная операция завершилась ошибкой. Повторите попытку."
+
+msgid "Account"
+msgstr "Аккаунт"
+
+msgid "Activating"
+msgstr "Запускается"
+
+msgid "Active"
+msgstr "Активен"
+
+msgid "Advanced Auto Install"
+msgstr "Расширенная автоустановка"
+
+msgid "All integration components are present"
+msgstr "Все компоненты интеграции установлены"
+
+msgid "Auth error"
+msgstr "Ошибка авторизации"
+
+msgid "Auth status"
+msgstr "Статус авторизации"
+
+msgid "Authorization"
+msgstr "Авторизация"
+
+msgid "Authorization cancelled"
+msgstr "Авторизация отменена"
+
+msgid "Authorization cannot start because OAuth credentials are missing in daemon service."
+msgstr "Не удалось начать авторизацию, потому что в сервисе демона отсутствуют OAuth credentials."
+
+msgid "Authorization completed successfully. You can return to the app."
+msgstr "Авторизация успешно завершена. Можно вернуться в приложение."
+
+msgid "Authorization error"
+msgstr "Ошибка авторизации"
+
+msgid "Authorization failed"
+msgstr "Авторизация не удалась"
+
+msgid "Authorization completed with warnings"
+msgstr "Авторизация завершена с предупреждениями"
+
+msgid "Authorization succeeded, but some follow-up steps need attention:"
+msgstr "Авторизация успешно завершена, но несколько последующих шагов требуют внимания:"
+
+msgid "Authorization request cancelled"
+msgstr "Запрос на авторизацию отменён"
+
+msgid "Authorization timed out"
+msgstr "Время ожидания авторизации истекло"
+
+msgid "Authorize access in your browser, then paste the verification code here."
+msgstr "Подтвердите доступ в браузере, затем вставьте сюда verification code."
+
+msgid "Authorized"
+msgstr "Авторизовано"
+
+msgid "Auto install failed"
+msgstr "Автоустановка не удалась"
+
+msgid "Automatic install requires write access to the Nautilus extension directory or administrator privileges."
+msgstr "Автоматической установке нужен доступ на запись в каталог расширений Nautilus или права администратора."
+
+msgid "Autostart"
+msgstr "Автозапуск"
+
+msgid "Busy"
+msgstr "Занят"
+
+msgid "Cache folder"
+msgstr "Папка кэша"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Cancel Auth"
+msgstr "Отменить авторизацию"
+
+msgid "Cancelled"
+msgstr "Отменено"
+
+msgid "Check Nautilus/FUSE integration and run setup helpers."
+msgstr "Проверяйте интеграцию Nautilus/FUSE и запускайте помощники настройки."
+
+msgid "Check daemon status and try again."
+msgstr "Проверьте состояние демона и попробуйте снова."
+
+msgid "Cloud poll interval (s)"
+msgstr "Интервал опроса облака (с)"
+
+msgid "Confirm integration removal"
+msgstr "Подтвердите удаление интеграций"
+
+msgid "Confirm logout"
+msgstr "Подтвердите выход"
+
+msgid "Connect Yandex Disk"
+msgstr "Подключение Яндекс Диска"
+
+msgid "Connect your account and manage authorization from one place."
+msgstr "Подключите аккаунт и управляйте авторизацией из одного места."
+
+msgid "Continue"
+msgstr "Продолжить"
+
+msgid "Continue?"
+msgstr "Продолжить?"
+
+msgid "Copy command"
+msgstr "Скопировать команду"
+
+msgid "Could not install integration components:"
+msgstr "Не удалось установить компоненты интеграции:"
+
+msgid "Could not open the browser"
+msgstr "Не удалось открыть браузер"
+
+msgid "Could not enable autostart:"
+msgstr "Не удалось включить автозапуск:"
+
+msgid "Could not remove all integration files:"
+msgstr "Не удалось удалить все файлы интеграции:"
+
+msgid "Could not restart or start the sync service:"
+msgstr "Не удалось перезапустить или запустить службу синхронизации:"
+
+msgid "Could not restart Nautilus:"
+msgstr "Не удалось перезапустить Nautilus:"
+
+msgid "Could not save OAuth credentials:"
+msgstr "Не удалось сохранить OAuth credentials:"
+
+msgid "Could not save the selected language."
+msgstr "Не удалось сохранить выбранный язык."
+
+msgid "Could not verify sync service status:"
+msgstr "Не удалось проверить состояние службы синхронизации:"
+
+msgid "Could not start authorization after saving credentials:"
+msgstr "Не удалось начать авторизацию после сохранения credentials:"
+
+msgid "Could not start authorization."
+msgstr "Не удалось начать авторизацию."
+
+msgid "Daemon"
+msgstr "Демон"
+
+msgid "Daemon status"
+msgstr "Статус демона"
+
+msgid "Deactivating"
+msgstr "Останавливается"
+
+msgid "Diagnostics"
+msgstr "Диагностика"
+
+msgid "Diagnostics error"
+msgstr "Ошибка диагностики"
+
+msgid "Disable autostart"
+msgstr "Выключить автозапуск"
+
+msgid "Disabled"
+msgstr "Выключен"
+
+msgid "Emblems"
+msgstr "Эмблемы"
+
+msgid "Enable autostart"
+msgstr "Включить автозапуск"
+
+msgid "Enable autostart after successful authorization so the sync daemon starts with your GNOME session."
+msgstr "Включите автозапуск после успешной авторизации, чтобы демон синхронизации стартовал вместе с вашей GNOME-сессией."
+
+msgid "Enabled"
+msgstr "Включён"
+
+msgid "English"
+msgstr "English"
+
+msgid "Enter Yandex OAuth client id and secret:"
+msgstr "Введите client id и secret для OAuth-приложения Яндекса:"
+
+msgid "Enter code manually"
+msgstr "Ввести код вручную"
+
+msgid "Enter the verification code:"
+msgstr "Введите verification code:"
+
+msgid "Error"
+msgstr "Ошибка"
+
+msgid "FUSE helper"
+msgstr "FUSE helper"
+
+msgid "Failed"
+msgstr "Сбой"
+
+msgid "Failed to access keyring entry"
+msgstr "Не удалось получить доступ к записи keyring"
+
+msgid "Failed to build diagnostics report:"
+msgstr "Не удалось собрать диагностический отчёт:"
+
+msgid "Failed to read keyring token"
+msgstr "Не удалось прочитать токен из keyring"
+
+msgid "Failed to submit verification code:"
+msgstr "Не удалось отправить verification code:"
+
+msgid "Files Integration"
+msgstr "Интеграция с Files"
+
+msgid "Finish authorization"
+msgstr "Завершение авторизации"
+
+msgid "Guided Install"
+msgstr "Пошаговая установка"
+
+msgid "Idle"
+msgstr "Бездействует"
+
+msgid "Inactive"
+msgstr "Неактивен"
+
+msgid "Input/output error"
+msgstr "Ошибка ввода-вывода"
+
+msgid "Install/update FUSE helper"
+msgstr "Установить/обновить FUSE helper"
+
+msgid "Install/update Nautilus extension"
+msgstr "Установить/обновить расширение Nautilus"
+
+msgid "Integration state"
+msgstr "Состояние интеграции"
+
+msgid "Integrations"
+msgstr "Интеграции"
+
+msgid "Integrations status"
+msgstr "Статус интеграций"
+
+msgid "Language"
+msgstr "Язык"
+
+msgid "Language change failed"
+msgstr "Не удалось сменить язык"
+
+msgid "Local watcher enabled"
+msgstr "Локальный watcher включён"
+
+msgid "Logout"
+msgstr "Выйти"
+
+msgid "Manage the user service and check current daemon state."
+msgstr "Управляйте пользовательским сервисом и проверяйте текущее состояние демона."
+
+msgid "Manual code entry"
+msgstr "Ручной ввод кода"
+
+msgid "Masked"
+msgstr "Замаскирован"
+
+msgid "Missing components"
+msgstr "Отсутствуют компоненты"
+
+msgid "Nautilus extension"
+msgstr "Расширение Nautilus"
+
+msgid "Needs setup"
+msgstr "Требует настройки"
+
+msgid "Next step"
+msgstr "Следующий шаг"
+
+msgid "No"
+msgstr "Нет"
+
+msgid "No callback was received from the browser. Confirm the sign-in and try again."
+msgstr "Не был получен callback от браузера. Подтвердите вход и попробуйте снова."
+
+msgid "Not now"
+msgstr "Не сейчас"
+
+msgid "OAuth code exchange failed"
+msgstr "Не удалось обменять OAuth-код"
+
+msgid "OAuth credentials required"
+msgstr "Нужны OAuth credentials"
+
+msgid "OK"
+msgstr "ОК"
+
+msgid "Open Yandex Disk"
+msgstr "Открыть Яндекс Диск"
+
+msgid "Open Yandex Disk Folder"
+msgstr "Открыть папку Яндекс Диска"
+
+msgid "Open browser again"
+msgstr "Открыть браузер снова"
+
+msgid "Open this URL and paste the code:"
+msgstr "Откройте этот URL и вставьте код:"
+
+msgid "Paste verification code"
+msgstr "Вставьте verification code"
+
+msgid "Pending"
+msgstr "Ожидает"
+
+msgid "Queued or active operations"
+msgstr "Есть операции в очереди или в работе"
+
+msgid "Quit"
+msgstr "Выход"
+
+msgid "Re-check"
+msgstr "Проверить снова"
+
+msgid "Re-check integration status"
+msgstr "Проверить статус интеграции снова"
+
+msgid "Ready"
+msgstr "Готово"
+
+msgid "Recommendation"
+msgstr "Рекомендация"
+
+msgid "Refresh status"
+msgstr "Обновить статус"
+
+msgid "Reloading"
+msgstr "Перезагружается"
+
+msgid "Remote root"
+msgstr "Удалённый корень"
+
+msgid "Remove"
+msgstr "Удалить"
+
+msgid "Remove Nautilus extension, FUSE helper, and installed emblem icons?"
+msgstr "Удалить расширение Nautilus, FUSE helper и установленные иконки-эмблемы?"
+
+msgid "Remove integrations"
+msgstr "Удалить интеграции"
+
+msgid "Remove integrations failed"
+msgstr "Не удалось удалить интеграции"
+
+msgid "Remove saved credentials and disconnect this account?"
+msgstr "Удалить сохранённые credentials и отключить эту учётную запись?"
+
+msgid "Restart"
+msgstr "Перезапустить"
+
+msgid "Restart Files"
+msgstr "Перезапустить Files"
+
+msgid "Restart Files failed"
+msgstr "Не удалось перезапустить Files"
+
+msgid "Restart Files now?"
+msgstr "Перезапустить Files сейчас?"
+
+msgid "Restart GNOME Files (Nautilus) so it can load the new extension and refresh integration emblems."
+msgstr "Перезапустите GNOME Files (Nautilus), чтобы он подхватил новое расширение и обновил эмблемы интеграции."
+
+msgid "Restart GNOME Files (Nautilus) so it unloads removed integration components and refreshes overlays."
+msgstr "Перезапустите GNOME Files (Nautilus), чтобы он выгрузил удалённые компоненты интеграции и обновил оверлеи."
+
+msgid "Retry"
+msgstr "Повторить"
+
+msgid "Review service folders and startup behavior."
+msgstr "Просмотрите папки сервиса и параметры запуска."
+
+msgid "Run command"
+msgstr "Выполнить команду"
+
+msgid "Run these commands in a terminal, then press Re-check."
+msgstr "Выполните эти команды в терминале, затем нажмите «Проверить снова»."
+
+msgid "Running"
+msgstr "Работает"
+
+msgid "Russian"
+msgstr "Русский"
+
+msgid "Save and retry"
+msgstr "Сохранить и повторить"
+
+msgid "Saved token found"
+msgstr "Сохранённый токен найден"
+
+msgid "Saved token found in keyring"
+msgstr "Сохранённый токен найден в keyring"
+
+msgid "Saved token found in portal storage"
+msgstr "Сохранённый токен найден в portal storage"
+
+msgid "Service lifecycle"
+msgstr "Жизненный цикл сервиса"
+
+msgid "Service status"
+msgstr "Состояние сервиса"
+
+msgid "Service status is unavailable"
+msgstr "Статус сервиса недоступен"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Show diagnostics"
+msgstr "Показать диагностику"
+
+msgid "Some system files may require administrator privileges."
+msgstr "Для некоторых системных файлов могут понадобиться права администратора."
+
+msgid "Start"
+msgstr "Запустить"
+
+msgid "Start Auth"
+msgstr "Начать авторизацию"
+
+msgid "Start Auth failed"
+msgstr "Не удалось начать авторизацию"
+
+msgid "Start Auth, confirm access in the browser, then paste the code. After success the app automatically starts daemon, enables autostart, and checks integration readiness."
+msgstr "Нажмите «Начать авторизацию», подтвердите доступ в браузере и вставьте код. После успеха приложение автоматически запустит демон, включит автозапуск и проверит готовность интеграции."
+
+msgid "Starting"
+msgstr "Запускается"
+
+msgid "Stop"
+msgstr "Остановить"
+
+msgid "Stopped"
+msgstr "Остановлен"
+
+msgid "Stopping"
+msgstr "Останавливается"
+
+msgid "Submit code"
+msgstr "Отправить код"
+
+msgid "Runtime status summary and diagnostics export helper."
+msgstr "Сводка состояния во время выполнения и помощник для экспорта диагностики."
+
+msgid "Support tip"
+msgstr "Подсказка"
+
+msgid "Switch to manual verification code entry?"
+msgstr "Перейти к ручному вводу verification code?"
+
+msgid "Sync"
+msgstr "Синхронизация"
+
+msgid "Sync Status"
+msgstr "Статус синхронизации"
+
+msgid "Sync engine reported an error"
+msgstr "Движок синхронизации сообщил об ошибке"
+
+msgid "Sync folder"
+msgstr "Папка синхронизации"
+
+msgid "System default"
+msgstr "Системный язык"
+
+msgid "The OpenURI portal is unavailable. You can retry or enter the code manually."
+msgstr "Портал OpenURI недоступен. Можно повторить попытку или ввести код вручную."
+
+msgid "The authorization flow failed."
+msgstr "Процесс авторизации завершился ошибкой."
+
+msgid "The authorization flow was cancelled by the user."
+msgstr "Процесс авторизации был отменён пользователем."
+
+msgid "The sync service is not active yet."
+msgstr "Служба синхронизации ещё не перешла в активное состояние."
+
+msgid "The service did not return the code parameter. Retry sign-in or enter the code manually."
+msgstr "Сервис не вернул параметр code. Повторите вход или введите код вручную."
+
+msgid "Token is missing"
+msgstr "Токен отсутствует"
+
+msgid "Token is missing in keyring"
+msgstr "Токен отсутствует в keyring"
+
+msgid "Token is missing in portal storage"
+msgstr "Токен отсутствует в portal storage"
+
+msgid "Token removed"
+msgstr "Токен удалён"
+
+msgid "Token saved"
+msgstr "Токен сохранён"
+
+msgid "Unauthorized"
+msgstr "Не авторизовано"
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "Use Guided Install by default to follow safe host setup steps without elevated automatic actions."
+msgstr "По умолчанию используйте пошаговую установку, чтобы выполнить безопасные шаги настройки host-системы без автоматических действий с повышенными правами."
+
+msgid "Use Show diagnostics when reporting issues so service and integration state is captured in one snapshot."
+msgstr "Используйте «Показать диагностику» при сообщении о проблемах, чтобы состояние сервиса и интеграции попало в один снимок."
+
+msgid "Use Start when setting up for the first time, Restart after config changes, and Stop only for troubleshooting."
+msgstr "Используйте «Запустить» при первой настройке, «Перезапустить» после изменений конфигурации, а «Остановить» — только для диагностики."
+
+msgid "User service state"
+msgstr "Состояние пользовательского сервиса"
+
+msgid "Verification code"
+msgstr "Код подтверждения"
+
+msgid "Verification code was not received"
+msgstr "Код подтверждения не получен"
+
+msgid "Welcome"
+msgstr "Добро пожаловать"
+
+msgid "Worker loop (ms)"
+msgstr "Цикл worker (мс)"
+
+msgid "YADISK_TOKEN environment variable is set"
+msgstr "Переменная окружения YADISK_TOKEN установлена"
+
+msgid "Yandex Disk connected"
+msgstr "Яндекс Диск подключён"
+
+msgid "Yes"
+msgstr "Да"
+
+msgid "You can return to the app."
+msgstr "Можно вернуться в приложение."
+
+msgid "Your system browser will open for sign-in."
+msgstr "Сейчас откроется системный браузер для входа."

@@ -198,6 +198,18 @@
   - [x] Логирование через journald
 - [x] Подготовлен host-side smoke script для GNOME/D-Bus проверки: `packaging/host/gnome-live-smoke.sh`.
 
+### N) GNOME UX hardening и release-проверки
+- [ ] Для live-switch языка защитить/сохранить чувствительное временное состояние UI при пересборке окна:
+  - [ ] не терять активные auth dialogs и промежуточный ввод verification code;
+  - [ ] не оставлять подвешенные интерактивные сценарии при смене языка во время долгих операций.
+- [ ] Добить end-to-end проверку tray menu в живой GNOME-сессии:
+  - [ ] подтвердить, что смена языка обновляет заголовок/пункты tray без рестарта демона;
+  - [ ] проверить `Open Yandex Disk` и `Open Yandex Disk Folder` в dev/install сценариях;
+  - [ ] проверить поведение при кастомном `YADISK_SYNC_DIR`, `~/...` пути и при отсутствии папки.
+- [ ] После предложения перезапустить Nautilus добавить/подтвердить надёжную post-restart re-check стратегию:
+  - [ ] дождаться фактического relaunch `nautilus`/Files перед повторной проверкой;
+  - [ ] убедиться, что extension/provider действительно подхватились после рестарта, а не только команда запуска завершилась без ошибки.
+
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.ru/dev/disk/rest/
 - Yandex Disk API overview: https://yandex.ru/dev/disk/

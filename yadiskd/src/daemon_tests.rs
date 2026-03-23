@@ -17,6 +17,24 @@ fn expands_tilde_to_home_sync_dir() {
 }
 
 #[test]
+fn resolve_sync_root_path_uses_default_name_when_env_missing() {
+    let home = PathBuf::from("/tmp/home-user");
+    assert_eq!(
+        resolve_sync_root_path(None, &home),
+        PathBuf::from("/tmp/home-user/Yandex Disk")
+    );
+}
+
+#[test]
+fn resolve_sync_root_path_expands_home_prefix_from_env() {
+    let home = PathBuf::from("/tmp/home-user");
+    assert_eq!(
+        resolve_sync_root_path(Some("~/Custom Disk".to_string()), &home),
+        PathBuf::from("/tmp/home-user/Custom Disk")
+    );
+}
+
+#[test]
 fn reads_intervals_from_env_or_default() {
     assert_eq!(read_u64_env("NO_SUCH_ENV_FOR_TEST", 42), 42);
 }
