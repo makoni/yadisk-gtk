@@ -554,3 +554,30 @@ msgstr "Можно вернуться в приложение."
 
 msgid "Your system browser will open for sign-in."
 msgstr "Сейчас откроется системный браузер для входа."
+
+msgid "Available offline"
+msgstr "Доступно офлайн"
+
+msgid "Download"
+msgstr "Скачать"
+
+msgid "Only in cloud"
+msgstr "Только в облаке"
+
+msgid "Partially available offline"
+msgstr "Частично доступно офлайн"
+
+msgid "Remove Offline Copy"
+msgstr "Удалить офлайн-копию"
+
+msgid "Save Offline"
+msgstr "Сделать офлайн"
+
+msgid "Sync error"
+msgstr "Ошибка синхронизации"
+
+msgid "Syncing"
+msgstr "Синхронизация"
+
+msgid "Yandex Disk action"
+msgstr "Действие Яндекс Диска"

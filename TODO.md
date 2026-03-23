@@ -118,6 +118,7 @@
   - [x] рекурсивная индексация дерева + pagination.
   - [x] корректная обработка удалений/переименований из облака.
   - [x] auto-download для pinned файлов.
+  - [x] cloud-side delete отправляет локальные materialized copy в корзину вместо безвозвратного удаления.
 - [x] Local→Cloud:
   - [x] источник локальных событий (FUSE hooks или `notify` watcher).
   - [x] enqueue upload/move/delete по локальным изменениям.
@@ -162,6 +163,7 @@
   - [x] Реализация extension целиком на Rust (`yadisk-nautilus`) через `cdylib` и `libnautilus-extension` (API 4.1/50.rc, GNOME 49+ сигнатуры).
   - [x] `InfoProvider`: состояние файла через D-Bus `GetState`, эмблемы cloud/cached/syncing/error.
   - [x] `MenuProvider`: state-aware контекстные действия (`Save Offline`, `Download Now`, `Remove Offline Copy`, `Retry Sync`).
+  - [x] Локализация labels/tooltip/emblems для Nautilus extension через общий i18n runtime.
   - [x] Вызовы действий в `yadiskd` по D-Bus (`Pin`, `Download`, `Evict`, `Retry`) с fallback путей `disk:/...` и `/...`.
   - [x] Live updates: подписка на D-Bus сигналы `StateChanged`/`ConflictAdded` и инвалидация extension info.
   - [x] Установка в host-путь расширений Nautilus + smoke-проверка загрузки и вызовов.
@@ -172,7 +174,10 @@
   - [x] (A1) отдельный unit для FUSE mount lifecycle.
 - [x] Подготовить Flatpak manifest (если будет UI crate):
   - [x] portal permissions (Secret/OpenURI), сеть, без лишних filesystem access.
+  - [x] session D-Bus access для `me.spaceinbox.yadisk.Sync1`.
 - [x] Для A1: подготовить хост-пакеты (deb/rpm/arch) для daemon/FUSE/extension/provider.
+- [x] Добавить D-Bus activation service file для host-side `me.spaceinbox.yadisk.Sync1`.
+- [x] Выровнять FUSE user-unit с `YADISK_SYNC_DIR` вместо отдельного захардкоженного mount path.
 
 ### L) Тестирование и quality gates (что ещё не покрыто)
 - [x] Добавить e2e-тест «sync loop» (cloud list -> enqueue -> transfer -> index state transitions).
@@ -199,16 +204,16 @@
 - [x] Подготовлен host-side smoke script для GNOME/D-Bus проверки: `packaging/host/gnome-live-smoke.sh`.
 
 ### N) GNOME UX hardening и release-проверки
-- [ ] Для live-switch языка защитить/сохранить чувствительное временное состояние UI при пересборке окна:
-  - [ ] не терять активные auth dialogs и промежуточный ввод verification code;
-  - [ ] не оставлять подвешенные интерактивные сценарии при смене языка во время долгих операций.
+- [x] Для live-switch языка защитить/сохранить чувствительное временное состояние UI при пересборке окна:
+  - [x] не терять активные auth dialogs и промежуточный ввод verification code;
+  - [x] восстанавливать prompt OAuth credentials и текущий введённый текст после смены языка.
 - [ ] Добить end-to-end проверку tray menu в живой GNOME-сессии:
   - [ ] подтвердить, что смена языка обновляет заголовок/пункты tray без рестарта демона;
   - [ ] проверить `Open Yandex Disk` и `Open Yandex Disk Folder` в dev/install сценариях;
   - [ ] проверить поведение при кастомном `YADISK_SYNC_DIR`, `~/...` пути и при отсутствии папки.
-- [ ] После предложения перезапустить Nautilus добавить/подтвердить надёжную post-restart re-check стратегию:
-  - [ ] дождаться фактического relaunch `nautilus`/Files перед повторной проверкой;
-  - [ ] убедиться, что extension/provider действительно подхватились после рестарта, а не только команда запуска завершилась без ошибки.
+- [x] После предложения перезапустить Nautilus добавить/подтвердить надёжную post-restart re-check стратегию:
+  - [x] дождаться фактического relaunch `nautilus`/Files перед повторной проверкой;
+  - [x] убедиться, что `libyadisk_nautilus.so` действительно подхватился новым процессом Nautilus, а не только команда запуска завершилась без ошибки.
 
 ## 1) Документация (ссылки)
 - Yandex Disk REST API: https://yandex.ru/dev/disk/rest/

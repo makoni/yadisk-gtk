@@ -1,4 +1,5 @@
 use super::*;
+use yadisk_integrations::i18n::tr;
 
 #[test]
 fn maps_state_to_emblem_and_actions() {
@@ -29,8 +30,8 @@ fn maps_state_to_emblem_and_actions() {
     assert_eq!(
         menu_for_state(SyncUiState::CloudOnly)
             .first()
-            .map(|item| item.label),
-        Some("Download")
+            .map(|item| item.label.clone()),
+        Some(tr("Download"))
     );
     assert_eq!(
         emblem_for_state(SyncUiState::Partial),
@@ -74,7 +75,7 @@ fn parses_partial_state_from_dbus() {
     assert_eq!(SyncUiState::Partial.as_dbus(), "partial");
     assert_eq!(
         SyncUiState::Partial.badge_label(),
-        "Partially available offline"
+        tr("Partially available offline")
     );
 }
 

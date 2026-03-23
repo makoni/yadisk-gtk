@@ -690,6 +690,8 @@ async fn materialize_skips_missing_syncing_files() {
 async fn prune_removed_materialized_paths_removes_stale_paths_only() {
     let sync_dir = tempdir().unwrap();
     let cache_dir = tempdir().unwrap();
+    let trash_dir = tempdir().unwrap();
+    let _trash_guard = install_test_trash_dir(trash_dir.path().to_path_buf());
     let docs = sync_dir.path().join("Docs");
     tokio::fs::create_dir_all(&docs).await.unwrap();
     let stale = docs.join("Stale.txt");
@@ -718,6 +720,16 @@ async fn prune_removed_materialized_paths_removes_stale_paths_only() {
     assert!(tokio::fs::metadata(&stale).await.is_err());
     assert!(tokio::fs::metadata(&docs).await.is_err());
     assert!(tokio::fs::metadata(&keep).await.is_ok());
+    assert!(
+        tokio::fs::metadata(trash_dir.path().join("Stale.txt"))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tokio::fs::metadata(trash_dir.path().join("Docs"))
+            .await
+            .is_ok()
+    );
     assert!(tokio::fs::metadata(&stale_cache).await.is_err());
     assert!(tokio::fs::metadata(&keep_cache).await.is_ok());
 }

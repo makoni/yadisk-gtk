@@ -553,3 +553,30 @@ msgstr ""
 
 msgid "Your system browser will open for sign-in."
 msgstr ""
+
+msgid "Available offline"
+msgstr ""
+
+msgid "Download"
+msgstr ""
+
+msgid "Only in cloud"
+msgstr ""
+
+msgid "Partially available offline"
+msgstr ""
+
+msgid "Remove Offline Copy"
+msgstr ""
+
+msgid "Save Offline"
+msgstr ""
+
+msgid "Sync error"
+msgstr ""
+
+msgid "Syncing"
+msgstr ""
+
+msgid "Yandex Disk action"
+msgstr ""

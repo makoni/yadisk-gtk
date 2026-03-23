@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=me.spaceinbox.yadisk.Sync1
+Exec=/bin/sh -lc 'exec "$HOME/.local/bin/yadiskd"'
+SystemdService=yadiskd.service

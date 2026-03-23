@@ -5,7 +5,8 @@ Requires=yadiskd.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/yadisk-fuse --mount %h/YandexDisk
+Environment="YADISK_SYNC_DIR=%h/Yandex Disk"
+ExecStart=/bin/sh -lc 'exec "$HOME/.local/bin/yadisk-fuse" --mount "${YADISK_SYNC_DIR:-$HOME/Yandex Disk}"'
 Restart=on-failure
 RestartSec=5
 

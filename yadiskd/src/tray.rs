@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use tokio::sync::mpsc;
 use yadisk_integrations::i18n::{product_name, sync_with_saved_language, tr};
-use yadisk_integrations::ids::DBUS_NAME_SYNC;
+use yadisk_integrations::ids::{APP_ID_GTK, DBUS_NAME_SYNC};
 
 use crate::daemon::resolve_sync_root_from_env;
 
@@ -165,6 +165,10 @@ impl ksni::Tray for YadiskTray {
 }
 
 fn launch_ui_from_tray() {
+    if activate_running_ui_from_tray() {
+        return;
+    }
+
     let mut last_error: Option<String> = None;
     for candidate in ui_launch_candidates() {
         match std::process::Command::new(&candidate).spawn() {
@@ -184,6 +188,31 @@ fn launch_ui_from_tray() {
 
     if let Some(err) = last_error {
         eprintln!("[yadiskd] warning: failed to launch UI from tray: {err}");
+    }
+}
+
+fn activate_running_ui_from_tray() -> bool {
+    match std::process::Command::new("gapplication")
+        .arg("launch")
+        .arg(APP_ID_GTK)
+        .status()
+    {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!(
+                "[yadiskd] warning: gapplication launch {} exited with status {status}",
+                APP_ID_GTK
+            );
+            false
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            eprintln!(
+                "[yadiskd] warning: failed to activate UI via gapplication for {}: {err}",
+                APP_ID_GTK
+            );
+            false
+        }
     }
 }
 

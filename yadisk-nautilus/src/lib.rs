@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
+use yadisk_integrations::i18n::{sync_with_saved_language, tr};
 use yadisk_integrations::ids::{DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
 use zbus::Message;
 use zbus::blocking::{Connection, Proxy, proxy::SignalIterator};
@@ -43,13 +44,14 @@ impl SyncUiState {
         }
     }
 
-    pub fn badge_label(self) -> &'static str {
+    pub fn badge_label(self) -> String {
+        sync_with_saved_language();
         match self {
-            Self::CloudOnly => "Only in cloud",
-            Self::Cached => "Available offline",
-            Self::Partial => "Partially available offline",
-            Self::Syncing => "Syncing",
-            Self::Error => "Sync error",
+            Self::CloudOnly => tr("Only in cloud"),
+            Self::Cached => tr("Available offline"),
+            Self::Partial => tr("Partially available offline"),
+            Self::Syncing => tr("Syncing"),
+            Self::Error => tr("Sync error"),
         }
     }
 }
@@ -72,12 +74,13 @@ impl NautilusAction {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
+        sync_with_saved_language();
         match self {
-            Self::SaveOffline => "Save Offline",
-            Self::RemoveOfflineCopy => "Remove Offline Copy",
-            Self::DownloadNow => "Download",
-            Self::RetrySync => "Retry Sync",
+            Self::SaveOffline => tr("Save Offline"),
+            Self::RemoveOfflineCopy => tr("Remove Offline Copy"),
+            Self::DownloadNow => tr("Download"),
+            Self::RetrySync => tr("Retry Sync"),
         }
     }
 }
@@ -85,7 +88,7 @@ impl NautilusAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItemSpec {
     pub id: &'static str,
-    pub label: &'static str,
+    pub label: String,
     pub action: NautilusAction,
     pub is_primary: bool,
 }
@@ -94,7 +97,7 @@ pub struct MenuItemSpec {
 pub struct FileUiInfo {
     pub state: SyncUiState,
     pub emblem: &'static str,
-    pub badge_label: &'static str,
+    pub badge_label: String,
     pub menu: Vec<MenuItemSpec>,
 }
 

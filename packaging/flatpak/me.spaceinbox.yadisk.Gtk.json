@@ -7,7 +7,8 @@
   "finish-args": [
     "--share=network",
     "--talk-name=org.freedesktop.portal.Desktop",
-    "--talk-name=org.freedesktop.portal.Secret"
+    "--talk-name=org.freedesktop.portal.Secret",
+    "--talk-name=me.spaceinbox.yadisk.Sync1"
   ],
   "modules": []
 }

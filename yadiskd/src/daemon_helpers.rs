@@ -448,6 +448,94 @@ async fn collect_materialized_local_paths(
     Ok(paths)
 }
 
+#[cfg(test)]
+static TEST_TRASH_DIR: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn test_trash_dir() -> &'static std::sync::Mutex<Option<PathBuf>> {
+    TEST_TRASH_DIR.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+struct TestTrashDirGuard;
+
+#[cfg(test)]
+fn install_test_trash_dir(path: PathBuf) -> TestTrashDirGuard {
+    let mut guard = test_trash_dir()
+        .lock()
+        .expect("test trash dir mutex should be available");
+    *guard = Some(path);
+    TestTrashDirGuard
+}
+
+#[cfg(test)]
+impl Drop for TestTrashDirGuard {
+    fn drop(&mut self) {
+        let mut guard = test_trash_dir()
+            .lock()
+            .expect("test trash dir mutex should be available");
+        *guard = None;
+    }
+}
+
+#[cfg(test)]
+fn unique_trash_target(trash_dir: &Path, original_path: &Path) -> PathBuf {
+    let name = original_path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| std::ffi::OsStr::new("item"));
+    let candidate = trash_dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = original_path
+        .file_stem()
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| std::ffi::OsStr::new("item"))
+        .to_string_lossy()
+        .to_string();
+    let ext = original_path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_string());
+    for idx in 1.. {
+        let file_name = match &ext {
+            Some(ext) if !ext.is_empty() => format!("{stem}-{idx}.{ext}"),
+            _ => format!("{stem}-{idx}"),
+        };
+        let candidate = trash_dir.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("trash target generation should always find a free name")
+}
+
+async fn move_materialized_path_to_trash(path: &Path) -> anyhow::Result<()> {
+    #[cfg(test)]
+    let test_trash_dir = {
+        test_trash_dir()
+            .lock()
+            .expect("test trash dir mutex should be available")
+            .clone()
+    };
+    #[cfg(test)]
+    if let Some(trash_dir) = test_trash_dir {
+        tokio::fs::create_dir_all(&trash_dir).await?;
+        let target = unique_trash_target(&trash_dir, path);
+        tokio::fs::rename(path, target).await?;
+        return Ok(());
+    }
+
+    let owned = path.to_path_buf();
+    let display = owned.display().to_string();
+    tokio::task::spawn_blocking(move || trash::delete(&owned))
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to join trash task for {display}: {err}"))??;
+    Ok(())
+}
+
 async fn prune_removed_materialized_paths(
     previous: &HashSet<PathBuf>,
     current: &HashSet<PathBuf>,
@@ -467,10 +555,10 @@ async fn prune_removed_materialized_paths(
         }
         match tokio::fs::symlink_metadata(&path).await {
             Ok(meta) if meta.is_file() || meta.file_type().is_symlink() => {
-                let _ = tokio::fs::remove_file(&path).await;
+                move_materialized_path_to_trash(&path).await?;
             }
             Ok(meta) if meta.is_dir() => {
-                let _ = tokio::fs::remove_dir(&path).await;
+                move_materialized_path_to_trash(&path).await?;
             }
             Ok(_) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

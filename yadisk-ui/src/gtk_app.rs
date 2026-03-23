@@ -1,6 +1,8 @@
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::process::Command;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use gtk4::{gio, glib, prelude::*};
@@ -12,7 +14,8 @@ use yadisk_integrations::preferences::{LanguagePreference, load_ui_preferences};
 use crate::control_client::ControlClient;
 use crate::diagnostics::diagnostics_report_json;
 use crate::integration_control::{
-    ensure_auto_install_permissions, guided_install_commands, run_auto_install, run_auto_uninstall,
+    detect_integration_status, ensure_auto_install_permissions, guided_install_commands,
+    run_auto_install, run_auto_uninstall,
 };
 use crate::service_control::{
     ServiceAction, auto_import_oauth_credentials, configure_oauth_credentials,
@@ -67,6 +70,33 @@ struct PostAuthOutcome {
     warning: Option<String>,
 }
 
+#[derive(Clone)]
+enum TransientDialogState {
+    AuthCode {
+        auth_url: String,
+        code: String,
+    },
+    OAuthCredentials {
+        error_message: String,
+        client_id: String,
+        client_secret: String,
+    },
+}
+
+thread_local! {
+    static TRANSIENT_DIALOG_STATE: RefCell<Option<TransientDialogState>> = const { RefCell::new(None) };
+}
+
+fn set_transient_dialog_state(state: Option<TransientDialogState>) {
+    TRANSIENT_DIALOG_STATE.with(|slot| {
+        *slot.borrow_mut() = state;
+    });
+}
+
+fn current_transient_dialog_state() -> Option<TransientDialogState> {
+    TRANSIENT_DIALOG_STATE.with(|slot| slot.borrow().clone())
+}
+
 struct Widgets {
     overview_auth_badge: gtk4::Label,
     overview_daemon_badge: gtk4::Label,
@@ -95,13 +125,20 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
 
     let app = libadwaita::Application::builder()
         .application_id(APP_ID_GTK)
-        .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
-    app.connect_activate(move |app| build_window(app, start_tab.clone()));
+    app.connect_activate(move |app| present_or_build_window(app, start_tab.clone()));
 
     app.run_with_args::<&str>(&[]);
     Ok(())
+}
+
+fn present_or_build_window(app: &libadwaita::Application, start_tab: Option<String>) {
+    if let Some(window) = app.windows().into_iter().next() {
+        window.present();
+        return;
+    }
+    build_window(app, start_tab);
 }
 
 fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
@@ -146,9 +183,11 @@ fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
     let header = libadwaita::HeaderBar::builder()
         .title_widget(&gtk4::Label::new(Some(product_name())))
         .build();
+    header.add_css_class("app-header");
     header.pack_end(&refresh_button);
 
     let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    content.add_css_class("app-shell");
     content.append(&header);
     content.append(&overview_strip);
     content.append(&container);
@@ -160,6 +199,7 @@ fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
         .default_height(760)
         .content(&content)
         .build();
+    window.add_css_class("app-window");
 
     {
         let widgets_for_tick = Rc::clone(&widgets);
@@ -183,6 +223,7 @@ fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
     }
 
     wire_actions(app, &stack, Rc::clone(&widgets), &window);
+    restore_transient_dialog(&window, &stack, Rc::clone(&widgets));
     window.present();
 }
 
@@ -952,11 +993,48 @@ fn open_browser_url(url: &str) {
     }
 }
 
+fn restore_transient_dialog(
+    window: &libadwaita::ApplicationWindow,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+) {
+    match current_transient_dialog_state() {
+        Some(TransientDialogState::AuthCode { auth_url, code }) => {
+            prompt_auth_code_dialog_with_initial(window, stack, widgets, auth_url, code);
+        }
+        Some(TransientDialogState::OAuthCredentials {
+            error_message,
+            client_id,
+            client_secret,
+        }) => {
+            prompt_oauth_credentials_dialog_with_initial(
+                window,
+                stack,
+                widgets,
+                &error_message,
+                &client_id,
+                &client_secret,
+            );
+        }
+        None => {}
+    }
+}
+
 fn prompt_auth_code_dialog(
     window: &libadwaita::ApplicationWindow,
     stack: &gtk4::Stack,
     widgets: Rc<Widgets>,
     auth_url: String,
+) {
+    prompt_auth_code_dialog_with_initial(window, stack, widgets, auth_url, String::new());
+}
+
+fn prompt_auth_code_dialog_with_initial(
+    window: &libadwaita::ApplicationWindow,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+    auth_url: String,
+    initial_code: String,
 ) {
     let dialog = gtk4::Dialog::builder()
         .title(tr("Finish authorization").as_str())
@@ -982,18 +1060,34 @@ fn prompt_auth_code_dialog(
     let entry = gtk4::Entry::new();
     entry.set_placeholder_text(Some(tr("Paste verification code").as_str()));
     entry.set_activates_default(true);
+    entry.set_text(&initial_code);
     body.append(&message);
     body.append(&entry);
     content.append(&body);
+
+    set_transient_dialog_state(Some(TransientDialogState::AuthCode {
+        auth_url: auth_url.clone(),
+        code: initial_code,
+    }));
 
     let entry_for_response = entry.clone();
     let auth_url_for_response = auth_url.clone();
     let stack_for_response = stack.clone();
     let window_for_response = window.clone();
+    entry.connect_changed({
+        let auth_url = auth_url.clone();
+        move |entry| {
+            set_transient_dialog_state(Some(TransientDialogState::AuthCode {
+                auth_url: auth_url.clone(),
+                code: entry.text().to_string(),
+            }));
+        }
+    });
     dialog.connect_response(move |dialog, response| match response {
         gtk4::ResponseType::Accept => {
             let code = entry_for_response.text().trim().to_string();
             dialog.close();
+            set_transient_dialog_state(None);
             if !code.is_empty() {
                 let w = Rc::clone(&widgets);
                 let stack = stack_for_response.clone();
@@ -1042,6 +1136,7 @@ fn prompt_auth_code_dialog(
         }
         _ => {
             dialog.close();
+            set_transient_dialog_state(None);
             refresh_ui_async(&widgets);
         }
     });
@@ -1147,15 +1242,85 @@ fn prompt_nautilus_restart_dialog(
 }
 
 fn restart_nautilus() -> Result<()> {
-    let _ = Command::new("nautilus")
+    let integration_status = detect_integration_status();
+    let before = nautilus_pids();
+    let quit_status = Command::new("nautilus")
         .arg("-q")
         .status()
         .context("failed to run nautilus -q")?;
+    if !quit_status.success() && quit_status.code() != Some(255) {
+        anyhow::bail!("nautilus -q exited with status {quit_status}");
+    }
+    wait_for_nautilus_shutdown(&before)?;
     Command::new("nautilus")
         .arg("--new-window")
         .spawn()
         .context("failed to relaunch Nautilus after quit")?;
+    let pid = wait_for_nautilus_restart(&before)?;
+    if integration_status.nautilus_extension_installed {
+        verify_nautilus_extension_loaded(pid)?;
+    }
     Ok(())
+}
+
+fn nautilus_pids() -> BTreeSet<u32> {
+    let mut pids = BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
+            continue;
+        };
+        if comm.trim() == "nautilus" {
+            pids.insert(pid);
+        }
+    }
+    pids
+}
+
+fn wait_for_nautilus_shutdown(previous: &BTreeSet<u32>) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let current = nautilus_pids();
+        if previous.is_disjoint(&current) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    anyhow::bail!("timed out while waiting for Nautilus to exit");
+}
+
+fn wait_for_nautilus_restart(previous: &BTreeSet<u32>) -> Result<u32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let current = nautilus_pids();
+        if let Some(pid) = current.into_iter().find(|pid| !previous.contains(pid)) {
+            return Ok(pid);
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    anyhow::bail!("timed out while waiting for Nautilus to relaunch");
+}
+
+fn verify_nautilus_extension_loaded(pid: u32) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let maps_path = format!("/proc/{pid}/maps");
+        if let Ok(maps) = std::fs::read_to_string(&maps_path)
+            && maps.contains("libyadisk_nautilus.so")
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    anyhow::bail!("Nautilus restarted, but libyadisk_nautilus.so was not loaded");
 }
 
 fn auth_env_missing_error(err: &str) -> bool {
@@ -1170,6 +1335,17 @@ fn prompt_oauth_credentials_dialog(
     stack: &gtk4::Stack,
     widgets: Rc<Widgets>,
     error_message: &str,
+) {
+    prompt_oauth_credentials_dialog_with_initial(window, stack, widgets, error_message, "", "");
+}
+
+fn prompt_oauth_credentials_dialog_with_initial(
+    window: &libadwaita::ApplicationWindow,
+    stack: &gtk4::Stack,
+    widgets: Rc<Widgets>,
+    error_message: &str,
+    initial_client_id: &str,
+    initial_client_secret: &str,
 ) {
     let dialog = gtk4::Dialog::builder()
         .title(tr("OAuth credentials required").as_str())
@@ -1192,23 +1368,54 @@ fn prompt_oauth_credentials_dialog(
     message.set_xalign(0.0);
     let client_id = gtk4::Entry::new();
     client_id.set_placeholder_text(Some("YADISK_CLIENT_ID"));
+    client_id.set_text(initial_client_id);
     let client_secret = gtk4::Entry::new();
     client_secret.set_placeholder_text(Some("YADISK_CLIENT_SECRET"));
     client_secret.set_visibility(false);
+    client_secret.set_text(initial_client_secret);
     body.append(&message);
     body.append(&client_id);
     body.append(&client_secret);
     content.append(&body);
 
+    set_transient_dialog_state(Some(TransientDialogState::OAuthCredentials {
+        error_message: error_message.to_string(),
+        client_id: initial_client_id.to_string(),
+        client_secret: initial_client_secret.to_string(),
+    }));
+
     let client_id_for_response = client_id.clone();
     let client_secret_for_response = client_secret.clone();
     let window_for_response = window.clone();
     let stack_for_response = stack.clone();
+    client_id.connect_changed({
+        let error_message = error_message.to_string();
+        let client_secret = client_secret.clone();
+        move |entry| {
+            set_transient_dialog_state(Some(TransientDialogState::OAuthCredentials {
+                error_message: error_message.clone(),
+                client_id: entry.text().to_string(),
+                client_secret: client_secret.text().to_string(),
+            }));
+        }
+    });
+    client_secret.connect_changed({
+        let error_message = error_message.to_string();
+        let client_id = client_id.clone();
+        move |entry| {
+            set_transient_dialog_state(Some(TransientDialogState::OAuthCredentials {
+                error_message: error_message.clone(),
+                client_id: client_id.text().to_string(),
+                client_secret: entry.text().to_string(),
+            }));
+        }
+    });
     dialog.connect_response(move |dialog, response| {
         if response == gtk4::ResponseType::Accept {
             let id = client_id_for_response.text().trim().to_string();
             let secret = client_secret_for_response.text().trim().to_string();
             dialog.close();
+            set_transient_dialog_state(None);
             let w = Rc::clone(&widgets);
             let window = window_for_response.clone();
             let stack = stack_for_response.clone();
@@ -1238,6 +1445,7 @@ fn prompt_oauth_credentials_dialog(
             );
         } else {
             dialog.close();
+            set_transient_dialog_state(None);
         }
     });
     dialog.present();
@@ -1517,25 +1725,29 @@ fn guided_step_title(index: usize) -> String {
 fn install_css() {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(
-        ".navigation-sidebar { padding: 8px; border-radius: 16px; background: alpha(@window_bg_color, 0.36); border: 1px solid alpha(@window_fg_color, 0.06); }\n\
-         .navigation-sidebar row { border-radius: 10px; margin: 2px 0; padding: 4px 8px; }\n\
-         .navigation-sidebar row:selected { background: alpha(@accent_bg_color, 0.16); box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.32); }\n\
+        ".app-shell { background-image: linear-gradient(180deg, alpha(#fc3f1d, 0.06), transparent 180px), linear-gradient(135deg, alpha(#ffcc00, 0.04), transparent 38%); }\n\
+         .app-header { background-image: linear-gradient(90deg, alpha(#fc3f1d, 0.12), alpha(#ffcc00, 0.05)); border-bottom: 1px solid alpha(#fc3f1d, 0.16); }\n\
+         .navigation-sidebar { padding: 10px; border-radius: 18px; background: linear-gradient(180deg, alpha(#fc3f1d, 0.05), alpha(@window_bg_color, 0.40) 120px); border: 1px solid alpha(#fc3f1d, 0.14); }\n\
+         .navigation-sidebar row { border-radius: 12px; margin: 2px 0; padding: 5px 8px; }\n\
+         .navigation-sidebar row:selected { background: linear-gradient(90deg, alpha(#fc3f1d, 0.20), alpha(#ffcc00, 0.08)); box-shadow: inset 0 0 0 1px alpha(#fc3f1d, 0.32); }\n\
          .content-stack { min-width: 740px; }\n\
-         .overview-strip { padding-top: 6px; padding-bottom: 4px; }\n\
-         .overview-tile { padding: 9px 12px; border-radius: 12px; background: alpha(@window_bg_color, 0.46); border: 1px solid alpha(@window_fg_color, 0.07); }\n\
-         .overview-title { opacity: 0.86; font-weight: 600; }\n\
+         .overview-strip { padding-top: 8px; padding-bottom: 4px; }\n\
+         .overview-tile { padding: 10px 13px; border-radius: 14px; background: linear-gradient(180deg, alpha(#ffcc00, 0.03), alpha(@window_bg_color, 0.50)); border: 1px solid alpha(#fc3f1d, 0.12); }\n\
+         .overview-title { opacity: 0.90; font-weight: 700; }\n\
          .page-root { padding: 18px; }\n\
          .page-heading { margin-bottom: 4px; }\n\
-         .section-card { padding: 18px; border-radius: 16px; background: alpha(@window_bg_color, 0.58); border: 1px solid alpha(@window_fg_color, 0.09); }\n\
-         .section-muted { background: alpha(@window_fg_color, 0.035); border: 1px solid alpha(@window_fg_color, 0.06); }\n\
+         .section-card { padding: 20px; border-radius: 18px; background: linear-gradient(180deg, alpha(#ffffff, 0.02), alpha(@window_bg_color, 0.62)); border: 1px solid alpha(#fc3f1d, 0.10); }\n\
+         .section-muted { background: linear-gradient(180deg, alpha(#ffcc00, 0.02), alpha(@window_fg_color, 0.03)); border: 1px solid alpha(#fc3f1d, 0.08); }\n\
          .body-copy { color: alpha(@window_fg_color, 0.94); }\n\
          .note-text { color: alpha(@window_fg_color, 0.72); }\n\
          .action-row > button { min-height: 34px; border-radius: 10px; padding: 0 12px; }\n\
+         .action-row > button.suggested-action { background-image: linear-gradient(90deg, #fc3f1d, #ff8f3f); color: white; }\n\
          .pill { border-radius: 999px; padding: 4px 10px; font-weight: 600; }\n\
          .status-ready { background: alpha(@success_bg_color, 0.35); color: @success_fg_color; }\n\
          .status-needs { background: alpha(@warning_bg_color, 0.35); color: @warning_fg_color; }\n\
          .status-error { background: alpha(@error_bg_color, 0.35); color: @error_fg_color; }\n\
-         .status-unknown { background: alpha(@window_fg_color, 0.12); color: alpha(@window_fg_color, 0.88); }\n",
+         .status-unknown { background: alpha(@window_fg_color, 0.12); color: alpha(@window_fg_color, 0.88); }\n\
+         .accent { color: #ff8f3f; }\n",
     );
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(

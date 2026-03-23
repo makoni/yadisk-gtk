@@ -1,13 +1,25 @@
     fn sync_root() -> &'static PathBuf {
         SYNC_ROOT.get_or_init(|| {
             std::env::var("YADISK_SYNC_DIR")
-                .map(PathBuf::from)
+                .map(|value| expand_sync_root(&value))
                 .unwrap_or_else(|_| {
                     dirs::home_dir()
                         .unwrap_or_else(|| PathBuf::from("/"))
                         .join("Yandex Disk")
                 })
         })
+    }
+
+    fn expand_sync_root(value: &str) -> PathBuf {
+        if value == "~" {
+            return dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        }
+        if let Some(rest) = value.strip_prefix("~/")
+            && let Some(home) = dirs::home_dir()
+        {
+            return home.join(rest);
+        }
+        PathBuf::from(value)
     }
 
     fn dbus_client() -> Option<&'static Arc<SyncDbusClient>> {

@@ -16,6 +16,7 @@ use gobject_sys::{
     g_type_module_register_type,
 };
 use url::Url;
+use yadisk_integrations::i18n::tr;
 
 #[repr(C)]
 struct NautilusFileInfo {
@@ -276,8 +277,8 @@ unsafe extern "C" fn menu_provider_get_file_items(
     for spec in menu_for_state(state) {
         let item = create_menu_item(
             &format!("YadiskRust::{}", spec.id),
-            spec.label,
-            "Yandex Disk action",
+            spec.label.as_str(),
+            tr("Yandex Disk action").as_str(),
         );
         if item.is_null() {
             continue;

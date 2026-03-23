@@ -1,5 +1,6 @@
 yadisk-ui/src/gtk_app.rs
 yadisk-ui/src/ui_model.rs
 yadisk-ui/src/integration_control.rs
+yadisk-nautilus/src/lib.rs
 yadiskd/src/tray.rs
 yadiskd/src/oauth_flow.rs

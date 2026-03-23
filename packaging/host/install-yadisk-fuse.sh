@@ -47,4 +47,4 @@ mkdir -p "${install_dir}"
 install -m 0755 "target/release/yadisk-fuse" "${install_dir}/yadisk-fuse"
 
 echo "[install] installed: ${install_dir}/yadisk-fuse"
-echo "[install] run: ${install_dir}/yadisk-fuse --mount \"${HOME}/Yandex Disk\""
+echo "[install] run: YADISK_SYNC_DIR=\"\${YADISK_SYNC_DIR:-${HOME}/Yandex Disk}\" ${install_dir}/yadisk-fuse --mount \"\${YADISK_SYNC_DIR:-${HOME}/Yandex Disk}\""
