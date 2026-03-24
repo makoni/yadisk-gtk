@@ -204,6 +204,9 @@ msgstr "Введите verification code:"
 msgid "Error"
 msgstr "Ошибка"
 
+msgid "Export support bundle"
+msgstr "Экспортировать support bundle"
+
 msgid "FUSE helper"
 msgstr "FUSE helper"
 
@@ -215,6 +218,12 @@ msgstr "Не удалось получить доступ к записи keyrin
 
 msgid "Failed to build diagnostics report:"
 msgstr "Не удалось собрать диагностический отчёт:"
+
+msgid "Failed to collect daemon logs:"
+msgstr "Не удалось собрать логи демона:"
+
+msgid "Failed to export support bundle:"
+msgstr "Не удалось экспортировать support bundle:"
 
 msgid "Failed to read keyring token"
 msgstr "Не удалось прочитать токен из keyring"
@@ -420,6 +429,9 @@ msgstr "Сохранённый токен найден в keyring"
 msgid "Saved token found in portal storage"
 msgstr "Сохранённый токен найден в portal storage"
 
+msgid "Saved support bundle to:"
+msgstr "Support bundle сохранён в:"
+
 msgid "Service lifecycle"
 msgstr "Жизненный цикл сервиса"
 
@@ -471,6 +483,12 @@ msgstr "Сводка состояния во время выполнения и 
 msgid "Support tip"
 msgstr "Подсказка"
 
+msgid "Support bundle exported"
+msgstr "Support bundle экспортирован"
+
+msgid "Support bundle export failed"
+msgstr "Не удалось экспортировать support bundle"
+
 msgid "Switch to manual verification code entry?"
 msgstr "Перейти к ручному вводу verification code?"
 
@@ -498,8 +516,17 @@ msgstr "Портал OpenURI недоступен. Можно повторить
 msgid "The authorization flow failed."
 msgstr "Процесс авторизации завершился ошибкой."
 
+msgid "The file includes diagnostics state and recent daemon logs."
+msgstr "Файл включает диагностическое состояние и недавние логи демона."
+
 msgid "The authorization flow was cancelled by the user."
 msgstr "Процесс авторизации был отменён пользователем."
+
+msgid "Review it before sharing because file paths and operation names may be visible."
+msgstr "Перед отправкой проверьте файл: в нём могут быть видны пути к файлам и названия операций."
+
+msgid "Use Export support bundle when reporting issues so the current diagnostics snapshot and recent daemon logs are saved into one file."
+msgstr "Используйте «Экспортировать support bundle» при сообщении о проблемах, чтобы текущий диагностический снимок и недавние логи демона сохранились в один файл."
 
 msgid "The sync service is not active yet."
 msgstr "Служба синхронизации ещё не перешла в активное состояние."

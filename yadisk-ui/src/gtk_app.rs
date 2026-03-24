@@ -13,14 +13,15 @@ use yadisk_integrations::ids::APP_ID_GTK;
 use yadisk_integrations::preferences::{LanguagePreference, load_ui_preferences};
 
 use crate::control_client::ControlClient;
-use crate::diagnostics::diagnostics_report_json;
+use crate::diagnostics::{diagnostics_report_json, export_support_bundle};
 use crate::integration_control::{
     detect_integration_status, ensure_auto_install_permissions, guided_install_commands,
     run_auto_install, run_auto_uninstall,
 };
 use crate::service_control::{
     ServiceAction, auto_import_oauth_credentials, configure_oauth_credentials,
-    oauth_credentials_configured, query_daemon_service_status, run_service_action,
+    oauth_credentials_configured, query_daemon_service_status, recent_daemon_journal,
+    run_service_action,
 };
 use crate::ui_model::UiModel;
 
@@ -37,6 +38,7 @@ const ACTION_INTEGRATIONS_REMOVE: &str = "action-integrations-remove";
 const ACTION_AUTOSTART_ENABLE: &str = "action-autostart-enable";
 const ACTION_AUTOSTART_DISABLE: &str = "action-autostart-disable";
 const ACTION_DIAGNOSTICS_DUMP: &str = "action-diagnostics-dump";
+const ACTION_DIAGNOSTICS_EXPORT: &str = "action-diagnostics-export";
 
 /// Run `work` on a background thread, then call `then` on the GTK main thread.
 fn spawn_blocking<W, T, C>(work: W, then: C)
@@ -401,15 +403,18 @@ fn build_pages(
     diagnostics_label.add_css_class("monospace");
     diagnostics_card.append(&diagnostics_label);
     let diagnostics_actions = action_row();
+    let btn_export = gtk4::Button::with_label(tr("Export support bundle").as_str());
+    btn_export.set_widget_name(ACTION_DIAGNOSTICS_EXPORT);
+    btn_export.add_css_class("suggested-action");
+    diagnostics_actions.append(&btn_export);
     let btn_dump = gtk4::Button::with_label(tr("Show diagnostics").as_str());
     btn_dump.set_widget_name(ACTION_DIAGNOSTICS_DUMP);
-    btn_dump.add_css_class("suggested-action");
     diagnostics_actions.append(&btn_dump);
     diagnostics_card.append(&diagnostics_actions);
     diagnostics_content.append(&diagnostics_card);
     diagnostics_content.append(&note_card(
         "Support tip",
-        "Use Show diagnostics when reporting issues so service and integration state is captured in one snapshot.",
+        "Use Export support bundle when reporting issues so the current diagnostics snapshot and recent daemon logs are saved into one file.",
     ));
     stack.add_titled(
         &diagnostics,
@@ -951,6 +956,53 @@ fn wire_actions(
                         Err(msg) => {
                             show_text_dialog(&window, tr("Diagnostics error").as_str(), &msg)
                         }
+                    }
+                    refresh_ui_async(&widgets);
+                },
+            );
+        });
+    }
+    if let Some(button) = find_button(stack, ACTION_DIAGNOSTICS_EXPORT) {
+        let widgets = Rc::clone(&widgets);
+        let window = window.clone();
+        button.connect_clicked(move |_| {
+            let widgets = Rc::clone(&widgets);
+            let window = window.clone();
+            spawn_blocking(
+                || -> std::result::Result<std::path::PathBuf, String> {
+                    let model = UiModel::collect();
+                    let logs = recent_daemon_journal(400).map_err(|err| {
+                        format!("{}\n{err}", tr("Failed to collect daemon logs:"))
+                    })?;
+                    export_support_bundle(
+                        model.control.as_ref(),
+                        model.service.as_ref(),
+                        &model.integrations,
+                        model.settings.clone(),
+                        &logs,
+                    )
+                    .map_err(|err| {
+                        format!("{}\n{err}", tr("Failed to export support bundle:"))
+                    })
+                },
+                move |result| {
+                    match result {
+                        Ok(path) => show_text_dialog(
+                            &window,
+                            tr("Support bundle exported").as_str(),
+                            &format!(
+                                "{}\n{}\n\n{}\n\n{}",
+                                tr("Saved support bundle to:"),
+                                path.display(),
+                                tr("The file includes diagnostics state and recent daemon logs."),
+                                tr("Review it before sharing because file paths and operation names may be visible.")
+                            ),
+                        ),
+                        Err(msg) => show_text_dialog(
+                            &window,
+                            tr("Support bundle export failed").as_str(),
+                            &msg,
+                        ),
                     }
                     refresh_ui_async(&widgets);
                 },

@@ -88,6 +88,35 @@ pub fn run_service_action(action: ServiceAction) -> Result<()> {
     );
 }
 
+pub fn recent_daemon_journal(limit: usize) -> Result<String> {
+    let limit = limit.max(1).to_string();
+    let output = Command::new("journalctl")
+        .args([
+            "--user",
+            "-u",
+            USER_SERVICE_NAME,
+            "-n",
+            &limit,
+            "--no-pager",
+            "-o",
+            "short-iso",
+        ])
+        .output()
+        .context("failed to run journalctl for yadiskd.service")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "journalctl --user -u {} failed: {}",
+            USER_SERVICE_NAME,
+            command_output(&output)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok("No yadiskd.service journal entries found.".to_string());
+    }
+    Ok(stdout)
+}
+
 pub fn configure_oauth_credentials(client_id: &str, client_secret: &str) -> Result<()> {
     configure_oauth_credentials_with_redirect(client_id, client_secret, None)
 }

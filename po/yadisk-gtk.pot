@@ -203,6 +203,9 @@ msgstr ""
 msgid "Error"
 msgstr ""
 
+msgid "Export support bundle"
+msgstr ""
+
 msgid "FUSE helper"
 msgstr ""
 
@@ -213,6 +216,12 @@ msgid "Failed to access keyring entry"
 msgstr ""
 
 msgid "Failed to build diagnostics report:"
+msgstr ""
+
+msgid "Failed to collect daemon logs:"
+msgstr ""
+
+msgid "Failed to export support bundle:"
 msgstr ""
 
 msgid "Failed to read keyring token"
@@ -419,6 +428,9 @@ msgstr ""
 msgid "Saved token found in portal storage"
 msgstr ""
 
+msgid "Saved support bundle to:"
+msgstr ""
+
 msgid "Service lifecycle"
 msgstr ""
 
@@ -470,6 +482,12 @@ msgstr ""
 msgid "Support tip"
 msgstr ""
 
+msgid "Support bundle exported"
+msgstr ""
+
+msgid "Support bundle export failed"
+msgstr ""
+
 msgid "Switch to manual verification code entry?"
 msgstr ""
 
@@ -497,7 +515,16 @@ msgstr ""
 msgid "The authorization flow failed."
 msgstr ""
 
+msgid "The file includes diagnostics state and recent daemon logs."
+msgstr ""
+
 msgid "The authorization flow was cancelled by the user."
+msgstr ""
+
+msgid "Review it before sharing because file paths and operation names may be visible."
+msgstr ""
+
+msgid "Use Export support bundle when reporting issues so the current diagnostics snapshot and recent daemon logs are saved into one file."
 msgstr ""
 
 msgid "The sync service is not active yet."
