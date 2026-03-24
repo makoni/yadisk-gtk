@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,8 +12,11 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncReadExt;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use yadisk_core::{ApiErrorClass, DiskInfo, OperationStatus, ResourceType, YadiskClient};
+
+use crate::token_provider::{TokenProvider, TokenProviderError};
 
 use super::backoff::Backoff;
 use super::conflict::{self, ConflictDecision, FileMetadata};
@@ -46,10 +50,15 @@ pub enum EngineError {
     UploadTooLarge { size: u64, max_size: u64 },
     #[error("upload size {size} exceeds available cloud space {available}")]
     InsufficientCloudSpace { size: u64, available: u64 },
+    #[error("unsupported local entry for sync: {path}")]
+    UnsupportedLocalEntry { path: String },
+    #[error("token provider error: {0}")]
+    TokenProvider(#[from] TokenProviderError),
 }
 
 pub struct SyncEngine {
     client: YadiskClient,
+    token_provider: Option<Arc<AsyncMutex<TokenProvider>>>,
     index: IndexStore,
     transfer: TransferClient,
     cache_root: PathBuf,
@@ -122,6 +131,7 @@ impl SyncEngine {
     pub fn new(client: YadiskClient, index: IndexStore, cache_root: PathBuf) -> Self {
         Self {
             client,
+            token_provider: None,
             index,
             transfer: TransferClient::new(),
             cache_root,
@@ -137,6 +147,11 @@ impl SyncEngine {
 
     pub fn with_transfer(mut self, transfer: TransferClient) -> Self {
         self.transfer = transfer;
+        self
+    }
+
+    pub fn with_token_provider(mut self, token_provider: Arc<AsyncMutex<TokenProvider>>) -> Self {
+        self.token_provider = Some(token_provider);
         self
     }
 
@@ -208,7 +223,10 @@ impl SyncEngine {
             return Some(cached);
         }
 
-        match self.client.get_disk_info().await {
+        match self
+            .call_with_fresh_client(|client| async move { client.get_disk_info().await })
+            .await
+        {
             Ok(info) => {
                 *self
                     .disk_info_cache
@@ -249,6 +267,40 @@ impl SyncEngine {
             .disk_info_cache
             .lock()
             .expect("disk info mutex poisoned") = None;
+    }
+
+    async fn call_with_fresh_client<T, F, Fut>(&self, mut call: F) -> Result<T, EngineError>
+    where
+        F: FnMut(YadiskClient) -> Fut,
+        Fut: Future<Output = Result<T, yadisk_core::YadiskError>>,
+    {
+        let client = self.client_for_api(false).await?;
+        match call(client).await {
+            Ok(value) => Ok(value),
+            Err(err)
+                if matches!(err.classification(), Some(ApiErrorClass::Auth))
+                    && self.token_provider.is_some() =>
+            {
+                let retry_client = self.client_for_api(true).await?;
+                Ok(call(retry_client).await?)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn client_for_api(&self, force_refresh: bool) -> Result<YadiskClient, EngineError> {
+        let Some(provider) = &self.token_provider else {
+            return Ok(self.client.clone());
+        };
+        let token = {
+            let mut provider = provider.lock().await;
+            if force_refresh {
+                provider.refresh_now().await?
+            } else {
+                provider.valid_access_token().await?
+            }
+        };
+        Ok(self.client.with_token(token))
     }
 }
 
@@ -334,6 +386,7 @@ fn is_transient_error(err: &EngineError) -> bool {
             api.classification(),
             Some(ApiErrorClass::RateLimit | ApiErrorClass::Transient)
         ),
+        EngineError::UnsupportedLocalEntry { .. } => false,
         EngineError::Io(_)
         | EngineError::Transfer(TransferError::Request(_))
         | EngineError::Transfer(TransferError::Io(_))

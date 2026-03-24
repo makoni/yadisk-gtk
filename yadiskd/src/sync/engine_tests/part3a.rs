@@ -59,6 +59,80 @@
     }
 
     #[tokio::test]
+    async fn run_once_upload_refreshes_token_after_unauthorized_link_fetch() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/upload"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .and(query_param("overwrite", "true"))
+            .and(header("authorization", "OAuth old-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-token",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "refresh_token": "refresh-2",
+                "scope": "disk:read"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/upload"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .and(query_param("overwrite", "true"))
+            .and(header("authorization", "OAuth new-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/upload", server.uri()),
+                "method": "PUT",
+                "templated": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload"))
+            .and(body_bytes(b"payload"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine_with_token_provider(&server, dir.path(), "old-token", "refresh-1")
+            .await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(7),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+
+        let target = cache_path_for(dir.path(), "/Docs/A.txt").unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"payload").unwrap();
+
+        engine.enqueue_upload("/Docs/A.txt").await.unwrap();
+        assert!(engine.run_once().await.unwrap());
+    }
+
+    #[tokio::test]
     async fn run_once_upload_supports_disk_prefixed_paths() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

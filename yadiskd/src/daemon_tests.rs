@@ -55,6 +55,31 @@ async fn sync_root_availability_detects_missing_dir() {
 }
 
 #[tokio::test]
+async fn sync_root_identity_changes_after_recreate() {
+    let temp = tempdir().unwrap();
+    let sync_root = temp.path().join("sync");
+    tokio::fs::create_dir_all(&sync_root).await.unwrap();
+    let first = sync_root_identity(&sync_root).await.unwrap();
+
+    tokio::fs::remove_dir_all(&sync_root).await.unwrap();
+    tokio::fs::create_dir_all(&sync_root).await.unwrap();
+    let second = sync_root_identity(&sync_root).await.unwrap();
+
+    assert_ne!(first, second);
+}
+
+#[test]
+fn refresh_is_requested_when_sync_root_is_restored_or_replaced() {
+    let current = Some(SyncRootIdentity { dev: 1, ino: 2 });
+    let replaced = Some(SyncRootIdentity { dev: 1, ino: 3 });
+
+    assert!(should_refresh_materialized_sync_root(None, current));
+    assert!(should_refresh_materialized_sync_root(current, replaced));
+    assert!(!should_refresh_materialized_sync_root(current, current));
+    assert!(!should_refresh_materialized_sync_root(current, None));
+}
+
+#[tokio::test]
 async fn sleep_or_shutdown_returns_true_when_cancelled() {
     let shutdown = CancellationToken::new();
     shutdown.cancel();

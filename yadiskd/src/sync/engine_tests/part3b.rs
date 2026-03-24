@@ -222,6 +222,51 @@
     }
 
     #[tokio::test]
+    async fn run_once_upload_rejects_unsupported_local_entry() {
+        let server = MockServer::start().await;
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/Link.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "Link.txt".into(),
+                item_type: ItemType::File,
+                size: Some(1),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let source = cache_path_for(dir.path(), "/Docs/Link.txt").unwrap();
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        let target = dir.path().join("target.txt");
+        tokio::fs::write(&target, b"payload").await.unwrap();
+        std::os::unix::fs::symlink(&target, &source).unwrap();
+        engine.enqueue_upload("/Docs/Link.txt").await.unwrap();
+
+        let err = engine
+            .run_once()
+            .await
+            .expect_err("expected unsupported local entry error");
+        assert!(matches!(err, EngineError::UnsupportedLocalEntry { .. }));
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/Link.txt")
+            .await
+            .unwrap()
+            .unwrap();
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        assert_eq!(state.state, FileState::Error);
+    }
+
+    #[tokio::test]
     async fn run_once_uses_retry_after_header_for_requeue() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

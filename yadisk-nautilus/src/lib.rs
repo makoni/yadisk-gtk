@@ -1,12 +1,20 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use thiserror::Error;
 use yadisk_integrations::i18n::{sync_with_saved_language, tr};
-use yadisk_integrations::ids::{DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
+use yadisk_integrations::ids::{
+    DBUS_ERROR_INVALID_PATH, DBUS_ERROR_NOT_FOUND, DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC,
+    DBUS_OBJECT_PATH_SYNC,
+};
 use zbus::Message;
-use zbus::blocking::{Connection, Proxy, proxy::SignalIterator};
+use zbus::blocking::{
+    Connection, Proxy, connection::Builder as ConnectionBuilder, proxy::SignalIterator,
+};
+
+const SYNC_DBUS_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncUiState {
@@ -209,7 +217,9 @@ pub struct SyncDbusClient {
 impl SyncDbusClient {
     pub fn connect_session() -> Result<Self, ExtensionError> {
         Ok(Self {
-            connection: Connection::session()?,
+            connection: ConnectionBuilder::session()?
+                .method_timeout(SYNC_DBUS_TIMEOUT)
+                .build()?,
         })
     }
 
@@ -283,6 +293,7 @@ impl SyncDbusClient {
         remote_path: &str,
         action: NautilusAction,
     ) -> Result<(), ExtensionError> {
+        self.health_check()?;
         match action {
             NautilusAction::SaveOffline => self.save_offline(remote_path),
             NautilusAction::RemoveOfflineCopy => self.remove_offline_copy(remote_path),
@@ -303,7 +314,13 @@ impl SyncDbusClient {
         for candidate in remote_candidates {
             match self.perform_action(candidate, action) {
                 Ok(_) => return Ok(()),
-                Err(err) => last_err = Some(err),
+                Err(err) => {
+                    let retry = should_try_next_candidate(&err);
+                    last_err = Some(err);
+                    if !retry {
+                        break;
+                    }
+                }
             }
         }
         Err(last_err.unwrap_or(ExtensionError::EmptyCandidates))
@@ -320,10 +337,27 @@ impl SyncDbusClient {
         for candidate in remote_candidates {
             match self.get_state(candidate) {
                 Ok(state) => return Ok(state),
-                Err(err) => last_err = Some(err),
+                Err(err) => {
+                    let retry = should_try_next_candidate(&err);
+                    last_err = Some(err);
+                    if !retry {
+                        break;
+                    }
+                }
             }
         }
         Err(last_err.unwrap_or(ExtensionError::EmptyCandidates))
+    }
+
+    pub fn health_check(&self) -> Result<(), ExtensionError> {
+        self.connection.call_method(
+            Some(DBUS_NAME_SYNC),
+            DBUS_OBJECT_PATH_SYNC,
+            Some("org.freedesktop.DBus.Peer"),
+            "Ping",
+            &(),
+        )?;
+        Ok(())
     }
 
     pub fn subscribe_signals(&self) -> Result<SignalListener, ExtensionError> {
@@ -356,6 +390,33 @@ pub fn map_remote_to_local_path(remote_path: &str, sync_root: &Path) -> PathBuf 
         local.push(part);
     }
     local
+}
+
+fn should_try_next_candidate(err: &ExtensionError) -> bool {
+    match err {
+        ExtensionError::Dbus(zbus::Error::MethodError(_, detail, _)) => detail
+            .as_deref()
+            .is_some_and(is_retryable_lookup_error_detail),
+        ExtensionError::Dbus(zbus::Error::FDO(err)) => is_retryable_lookup_fdo_error(err),
+        ExtensionError::Fdo(err) => is_retryable_lookup_fdo_error(err),
+        ExtensionError::Dbus(
+            zbus::Error::InputOutput(_)
+            | zbus::Error::Failure(_)
+            | zbus::Error::Handshake(_)
+            | zbus::Error::InvalidReply
+            | zbus::Error::MissingField
+            | zbus::Error::Unsupported,
+        ) => false,
+        _ => true,
+    }
+}
+
+fn is_retryable_lookup_fdo_error(err: &zbus::fdo::Error) -> bool {
+    matches!(err, zbus::fdo::Error::Failed(detail) if is_retryable_lookup_error_detail(detail))
+}
+
+fn is_retryable_lookup_error_detail(detail: &str) -> bool {
+    detail.contains(DBUS_ERROR_NOT_FOUND) || detail.contains(DBUS_ERROR_INVALID_PATH)
 }
 
 pub struct NautilusInfoProvider {

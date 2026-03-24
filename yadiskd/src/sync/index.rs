@@ -205,6 +205,7 @@ pub struct ConflictRecord {
     pub reason: String,
 }
 
+#[derive(Clone)]
 pub struct IndexStore {
     pool: SqlitePool,
 }

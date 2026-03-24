@@ -1,9 +1,14 @@
     use super::*;
     use sqlx::SqlitePool;
+    use std::sync::Arc;
     use std::path::Path;
     use tempfile::tempdir;
     use wiremock::matchers::{body_bytes, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use crate::storage::OAuthState;
+    use crate::token_provider::TokenProvider;
+    use tokio::sync::Mutex as AsyncMutex;
+    use yadisk_core::OAuthClient;
 
     async fn make_engine(server: &MockServer, cache_root: &Path) -> SyncEngine {
         let client = YadiskClient::with_base_url(&server.uri(), "test-token").unwrap();
@@ -11,6 +16,31 @@
         let store = IndexStore::from_pool(pool);
         store.init().await.unwrap();
         SyncEngine::new(client, store, cache_root.to_path_buf())
+    }
+
+    async fn make_engine_with_token_provider(
+        server: &MockServer,
+        cache_root: &Path,
+        access_token: &str,
+        refresh_token: &str,
+    ) -> SyncEngine {
+        let client = YadiskClient::with_base_url(&server.uri(), access_token).unwrap();
+        let oauth_client =
+            OAuthClient::with_base_url(&server.uri(), "client-id", "secret").unwrap();
+        let token_provider = Arc::new(AsyncMutex::new(TokenProvider::new(
+            OAuthState {
+                access_token: access_token.to_string(),
+                refresh_token: Some(refresh_token.to_string()),
+                expires_at: Some(i64::MAX),
+                scope: Some("disk:read".into()),
+                token_type: Some("bearer".into()),
+            },
+            Some(oauth_client),
+        )));
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let store = IndexStore::from_pool(pool);
+        store.init().await.unwrap();
+        SyncEngine::new(client, store, cache_root.to_path_buf()).with_token_provider(token_provider)
     }
 
     #[tokio::test]
@@ -111,6 +141,76 @@
             .unwrap();
         let state = engine.index.get_state(item.id).await.unwrap().unwrap();
         assert_eq!(state.state, FileState::Cached);
+    }
+
+    #[tokio::test]
+    async fn run_once_download_refreshes_token_after_unauthorized_link_fetch() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/download"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .and(header("authorization", "OAuth old-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "new-token",
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "refresh_token": "refresh-2",
+                "scope": "disk:read"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk/resources/download"))
+            .and(query_param("path", "/Docs/A.txt"))
+            .and(header("authorization", "OAuth new-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "href": format!("{}/file", server.uri()),
+                "method": "GET",
+                "templated": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/file"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine_with_token_provider(&server, dir.path(), "old-token", "refresh-1")
+            .await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/A.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "A.txt".into(),
+                item_type: ItemType::File,
+                size: Some(5),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+
+        engine.enqueue_download("/Docs/A.txt").await.unwrap();
+        assert!(engine.run_once().await.unwrap());
+
+        let target = cache_path_for(dir.path(), "/Docs/A.txt").unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"hello");
     }
 
     #[tokio::test]
@@ -375,4 +475,3 @@
             Some(PathDisplayState::Partial)
         );
     }
-

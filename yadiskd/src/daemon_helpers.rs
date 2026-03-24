@@ -1,3 +1,5 @@
+use std::os::unix::fs::MetadataExt;
+
 fn tray_state_from_states(
     states: &HashMap<String, &'static str>,
     has_active_work: bool,
@@ -64,9 +66,9 @@ fn should_force_signal_snapshot(
             .any(|(path, state)| current_states.get(path) != Some(state))
 }
 
-async fn resolve_valid_token(_base_url: Option<&str>) -> anyhow::Result<String> {
+async fn resolve_oauth_state() -> anyhow::Result<crate::storage::OAuthState> {
     match std::env::var("YADISK_TOKEN") {
-        Ok(token) => Ok(token),
+        Ok(token) => Ok(crate::storage::OAuthState::from_access_token(token)),
         Err(_) => {
             let storage = match tokio::time::timeout(Duration::from_secs(3), TokenStorage::new())
                 .await
@@ -74,22 +76,28 @@ async fn resolve_valid_token(_base_url: Option<&str>) -> anyhow::Result<String> 
                 Ok(Ok(storage)) => storage,
                 Ok(Err(err)) => {
                     eprintln!("[yadiskd] warning: token storage unavailable at startup: {err}");
-                    return Ok(String::new());
+                    return Ok(crate::storage::OAuthState::from_access_token(String::new()));
                 }
                 Err(_) => {
                     eprintln!("[yadiskd] warning: token storage init timed out at startup");
-                    return Ok(String::new());
+                    return Ok(crate::storage::OAuthState::from_access_token(String::new()));
                 }
             };
             Ok(match storage.get_oauth_state() {
-                Ok(state) => state.access_token,
+                Ok(state) => state,
                 Err(err) => {
                     eprintln!("[yadiskd] warning: saved token is unavailable at startup: {err}");
-                    String::new()
+                    crate::storage::OAuthState::from_access_token(String::new())
                 }
             })
         }
     }
+}
+
+fn oauth_client_from_env() -> Option<yadisk_core::OAuthClient> {
+    let client_id = std::env::var("YADISK_CLIENT_ID").ok()?;
+    let client_secret = std::env::var("YADISK_CLIENT_SECRET").ok()?;
+    yadisk_core::OAuthClient::new(client_id, client_secret).ok()
 }
 
 #[cfg(test)]
@@ -647,11 +655,39 @@ fn error_contains_enosys(err: &anyhow::Error) -> bool {
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SyncRootIdentity {
+    dev: u64,
+    ino: u64,
+}
+
 async fn is_sync_root_available(sync_root: &Path) -> bool {
     tokio::fs::metadata(sync_root)
         .await
         .map(|meta| meta.is_dir())
         .unwrap_or(false)
+}
+
+async fn sync_root_identity(sync_root: &Path) -> Option<SyncRootIdentity> {
+    let meta = tokio::fs::metadata(sync_root).await.ok()?;
+    if !meta.is_dir() {
+        return None;
+    }
+    Some(SyncRootIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+fn should_refresh_materialized_sync_root(
+    previous: Option<SyncRootIdentity>,
+    current: Option<SyncRootIdentity>,
+) -> bool {
+    match (previous, current) {
+        (None, Some(_)) => true,
+        (Some(previous), Some(current)) => previous != current,
+        _ => false,
+    }
 }
 
 fn sync_path_for(sync_root: &Path, remote_path: &str) -> anyhow::Result<PathBuf> {

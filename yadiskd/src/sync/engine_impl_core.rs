@@ -1,6 +1,8 @@
 impl SyncEngine {
     pub async fn sync_directory_once(&self, path: &str) -> Result<usize, EngineError> {
-        let list = self.client.list_directory_all(path, 100, None).await?;
+        let list = self
+            .call_with_fresh_client(|client| async move { client.list_directory_all(path, 100, None).await })
+            .await?;
         for item in &list {
             let input = ItemInput {
                 path: item.path.clone(),
@@ -501,18 +503,25 @@ impl SyncEngine {
             OperationKind::Upload => self.execute_upload(&op.path).await,
             OperationKind::Mkdir => self.execute_mkdir(&op.path).await,
             OperationKind::Delete => {
-                match self.client.delete_resource(&op.path, true).await {
+                let delete_path = op.path.clone();
+                match self
+                    .call_with_fresh_client(|client| {
+                        let delete_path = delete_path.clone();
+                        async move { client.delete_resource(&delete_path, true).await }
+                    })
+                    .await
+                {
                     Ok(link) => {
                         if let Some(link) = link {
                             self.wait_for_operation(link.href.as_str()).await?;
                         }
                     }
-                    Err(yadisk_core::YadiskError::Api { status, .. })
+                    Err(EngineError::Api(yadisk_core::YadiskError::Api { status, .. }))
                         if status == reqwest::StatusCode::NOT_FOUND =>
                     {
                         // Resource already deleted on remote — treat as success
                     }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => return Err(err),
                 }
                 self.index.delete_item_by_path(&op.path).await?;
                 Ok(())

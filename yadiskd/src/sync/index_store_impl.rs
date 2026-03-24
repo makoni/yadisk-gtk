@@ -376,6 +376,23 @@ impl IndexStore {
         Ok(())
     }
 
+    pub async fn delete_ops_by_prefix(&self, prefix: &str) -> Result<(), IndexError> {
+        let [prefix_a, prefix_b] = prefix_variants(prefix);
+        let pattern_a = like_pattern_for_prefix(&prefix_a);
+        let pattern_b = like_pattern_for_prefix(&prefix_b);
+        sqlx::query(
+            "DELETE FROM ops_queue
+             WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\' OR path = ?3 OR path LIKE ?4 ESCAPE '\\'",
+        )
+        .bind(prefix_a)
+        .bind(pattern_a)
+        .bind(prefix_b)
+        .bind(pattern_b)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn requeue_op(
         &self,
         op: &Operation,

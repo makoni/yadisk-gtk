@@ -54,7 +54,9 @@ impl SyncEngine {
             self.ensure_cache_dir_for_remote(&parent).await?;
         }
 
-        let link = self.client.get_download_link(path).await?;
+        let link = self
+            .call_with_fresh_client(|client| async move { client.get_download_link(path).await })
+            .await?;
         let target = cache_path_for(&self.cache_root, path)?;
         let token = self.register_transfer_token(path);
         let transfer_result = self
@@ -132,14 +134,17 @@ impl SyncEngine {
             });
         }
 
-        let remote = match self.client.get_resource(path).await {
+        let remote = match self
+            .call_with_fresh_client(|client| async move { client.get_resource(path).await })
+            .await
+        {
             Ok(resource) => Some(resource),
-            Err(yadisk_core::YadiskError::Api { status, .. })
+            Err(EngineError::Api(yadisk_core::YadiskError::Api { status, .. }))
                 if status == reqwest::StatusCode::NOT_FOUND =>
             {
                 None
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(err),
         };
 
         let base = if item.last_synced_hash.is_some() || item.last_synced_modified.is_some() {
@@ -218,8 +223,13 @@ impl SyncEngine {
     }
 
     async fn local_file_version(&self, source: &std::path::Path) -> Result<LocalFileVersion, EngineError> {
+        let meta = tokio::fs::symlink_metadata(source).await?;
+        if !meta.is_file() {
+            return Err(EngineError::UnsupportedLocalEntry {
+                path: source.display().to_string(),
+            });
+        }
         let hash = Self::file_md5_hex(source).await?;
-        let meta = tokio::fs::metadata(source).await?;
         let modified = meta
             .modified()
             .ok()
@@ -296,7 +306,9 @@ impl SyncEngine {
         item: &ItemRecord,
         local_version: &LocalFileVersion,
     ) -> Result<(), EngineError> {
-        let link = self.client.get_upload_link(path, true).await?;
+        let link = self
+            .call_with_fresh_client(|client| async move { client.get_upload_link(path, true).await })
+            .await?;
         let token = self.register_transfer_token(path);
         let transfer_result = self
             .transfer
@@ -326,8 +338,9 @@ impl SyncEngine {
 
         // Post-upload integrity check: verify the server received the complete file
         if let Ok(remote) = self
-            .client
-            .get_resource_with_fields(path, Some(&["md5"]))
+            .call_with_fresh_client(|client| async move {
+                client.get_resource_with_fields(path, Some(&["md5"])).await
+            })
             .await
             && let Some(remote_md5) = &remote.md5
             && !remote_md5.eq_ignore_ascii_case(&local_version.hash)
@@ -367,7 +380,9 @@ impl SyncEngine {
     }
 
     async fn execute_mkdir(&self, path: &str) -> Result<(), EngineError> {
-        let resource = self.client.create_folder(path).await?;
+        let resource = self
+            .call_with_fresh_client(|client| async move { client.create_folder(path).await })
+            .await?;
         let item = self
             .index
             .upsert_item(&ItemInput {
@@ -500,7 +515,12 @@ impl SyncEngine {
 
     async fn wait_for_operation(&self, operation_url: &str) -> Result<(), EngineError> {
         for attempt in 0..10u32 {
-            match self.client.get_operation_status(operation_url).await? {
+            match self
+                .call_with_fresh_client(
+                    |client| async move { client.get_operation_status(operation_url).await },
+                )
+                .await?
+            {
                 OperationStatus::Success => return Ok(()),
                 OperationStatus::Failure => return Err(EngineError::OperationFailed),
                 OperationStatus::InProgress => {
@@ -518,7 +538,12 @@ impl SyncEngine {
         let mut stack = vec![root.to_string()];
         let mut out = Vec::new();
         while let Some(path) = stack.pop() {
-            let items = self.client.list_directory_all(&path, 100, None).await?;
+            let items = self
+                .call_with_fresh_client(|client| {
+                    let path = path.clone();
+                    async move { client.list_directory_all(&path, 100, None).await }
+                })
+                .await?;
             for item in items {
                 if item.resource_type == ResourceType::Dir {
                     stack.push(item.path.clone());

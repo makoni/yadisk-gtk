@@ -53,6 +53,14 @@ impl YadiskClient {
         })
     }
 
+    pub fn with_token(&self, token: impl Into<String>) -> Self {
+        Self {
+            http: self.http.clone(),
+            base_url: self.base_url.clone(),
+            token: token.into(),
+        }
+    }
+
     pub async fn get_disk_info(&self) -> Result<DiskInfo, YadiskError> {
         let url = self.endpoint("/v1/disk")?;
         let response = self

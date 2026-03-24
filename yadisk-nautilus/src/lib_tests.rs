@@ -1,4 +1,5 @@
 use super::*;
+use std::io;
 use yadisk_integrations::i18n::tr;
 
 #[test]
@@ -105,6 +106,22 @@ fn unsupported_signal_variant_is_defined() {
     // Unknown D-Bus signals are now silently skipped (returning Ok(None)).
     let err = ExtensionError::UnsupportedSignal("test".to_string());
     assert!(format!("{err}").contains("unsupported"));
+}
+
+#[test]
+fn transport_dbus_errors_do_not_retry_alternate_candidates() {
+    let err = ExtensionError::Dbus(zbus::Error::InputOutput(
+        io::Error::from(io::ErrorKind::TimedOut).into(),
+    ));
+    assert!(!should_try_next_candidate(&err));
+}
+
+#[test]
+fn method_errors_still_allow_alternate_candidates() {
+    let err = ExtensionError::Fdo(zbus::fdo::Error::Failed(
+        "me.spaceinbox.yadisk.Sync1.Error.NotFound: path does not exist".to_string(),
+    ));
+    assert!(should_try_next_candidate(&err));
 }
 
 #[test]

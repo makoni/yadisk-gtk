@@ -1,5 +1,12 @@
 #![allow(dead_code)]
 
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_CONFLICT_SUFFIX: AtomicU64 = AtomicU64::new(0);
+static CONFLICT_PROCESS_NONCE: OnceLock<u64> = OnceLock::new();
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMetadata {
     pub modified: i64,
@@ -52,8 +59,7 @@ pub fn resolve_conflict(
 }
 
 fn conflict_path(path: &str, stamp: i64) -> String {
-    use rand::Rng;
-    let suffix: u16 = rand::thread_rng().r#gen();
+    let suffix = next_conflict_suffix();
     let (dir, name) = match path.rsplit_once('/') {
         Some((dir, name)) => (format!("{dir}/"), name),
         None => (String::new(), path),
@@ -62,10 +68,22 @@ fn conflict_path(path: &str, stamp: i64) -> String {
     if let Some((stem, ext)) = name.rsplit_once('.')
         && !stem.is_empty()
     {
-        return format!("{dir}{stem} (conflict {stamp}-{suffix:04x}).{ext}");
+        return format!("{dir}{stem} (conflict {stamp}-{suffix}).{ext}");
     }
 
-    format!("{dir}{name} (conflict {stamp}-{suffix:04x})")
+    format!("{dir}{name} (conflict {stamp}-{suffix})")
+}
+
+fn next_conflict_suffix() -> String {
+    let serial = NEXT_CONFLICT_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    let nonce = *CONFLICT_PROCESS_NONCE.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ u64::from(std::process::id())
+    });
+    format!("{nonce:016x}-{serial:016x}")
 }
 
 #[cfg(test)]
@@ -149,14 +167,15 @@ mod tests {
 
     #[test]
     fn conflict_paths_are_unique_for_same_timestamp() {
-        let path1 = conflict_path("/Docs/A.txt", 100);
-        let path2 = conflict_path("/Docs/A.txt", 100);
-        assert_ne!(
-            path1, path2,
-            "two conflict paths with same timestamp must differ"
-        );
-        assert!(path1.starts_with("/Docs/A (conflict 100-"));
-        assert!(path2.starts_with("/Docs/A (conflict 100-"));
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1024 {
+            let path = conflict_path("/Docs/A.txt", 100);
+            assert!(
+                seen.insert(path.clone()),
+                "two conflict paths with same timestamp must differ: {path}"
+            );
+            assert!(path.starts_with("/Docs/A (conflict 100-"));
+        }
     }
 
     #[test]

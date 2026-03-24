@@ -8,23 +8,27 @@ fn main() {
 mod app {
     use std::collections::HashMap;
     use std::ffi::OsStr;
+    use std::fs::OpenOptions;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use fuser::{
-        FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory,
-        ReplyEntry, ReplyOpen, Request,
+        FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyCreate, ReplyData,
+        ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
     };
-    use libc::{EIO, ENOENT};
+    use libc::{EIO, EISDIR, ENOENT, ENOTDIR, O_ACCMODE, O_RDWR, O_TRUNC, O_WRONLY};
     use tokio::runtime::Runtime;
+    use yadisk_fuse::{FuseBridgeError, YadiskFuseBridge};
     use yadisk_integrations::ids::{DBUS_INTERFACE_SYNC, DBUS_NAME_SYNC, DBUS_OBJECT_PATH_SYNC};
     use yadiskd::sync::index::{FileState, IndexStore, ItemType};
     use yadiskd::sync::paths::cache_path_for;
-    use zbus::blocking::{Connection, Proxy};
+    use zbus::blocking::{Connection, Proxy, connection::Builder as ConnectionBuilder};
 
     const TTL: Duration = Duration::from_secs(1);
     const MAX_INODE_CACHE_ENTRIES: usize = 100_000;
+    const DBUS_HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(2);
+    const DBUS_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
     struct InodeMap {
         next: u64,
@@ -176,7 +180,10 @@ mod app {
         }
 
         fn download(&self, path: &str) -> bool {
-            let Ok(connection) = Connection::session() else {
+            if !Self::ping() {
+                return false;
+            }
+            let Some(connection) = Self::connection(DBUS_DOWNLOAD_TIMEOUT) else {
                 return false;
             };
             let Ok(proxy) = Proxy::new(
@@ -189,13 +196,71 @@ mod app {
             };
             proxy.call_method("Download", &(path)).is_ok()
         }
+
+        fn ping() -> bool {
+            let Some(connection) = Self::connection(DBUS_HEALTHCHECK_TIMEOUT) else {
+                return false;
+            };
+            connection
+                .call_method(
+                    Some(DBUS_NAME_SYNC),
+                    DBUS_OBJECT_PATH_SYNC,
+                    Some("org.freedesktop.DBus.Peer"),
+                    "Ping",
+                    &(),
+                )
+                .is_ok()
+        }
+
+        fn connection(timeout: Duration) -> Option<Connection> {
+            ConnectionBuilder::session()
+                .ok()?
+                .method_timeout(timeout)
+                .build()
+                .ok()
+        }
+    }
+
+    #[derive(Default)]
+    struct HandleMap {
+        next: u64,
+        open: HashMap<u64, OpenHandle>,
+    }
+
+    #[derive(Clone)]
+    struct OpenHandle {
+        path: String,
+        dirty: bool,
+    }
+
+    impl HandleMap {
+        fn allocate(&mut self, path: String) -> u64 {
+            let fh = if self.next == 0 { 1 } else { self.next };
+            self.next = fh.saturating_add(1);
+            self.open.insert(fh, OpenHandle { path, dirty: false });
+            fh
+        }
+
+        fn get(&self, fh: u64) -> Option<&OpenHandle> {
+            self.open.get(&fh)
+        }
+
+        fn get_mut(&mut self, fh: u64) -> Option<&mut OpenHandle> {
+            self.open.get_mut(&fh)
+        }
+
+        fn remove(&mut self, fh: u64) -> Option<OpenHandle> {
+            self.open.remove(&fh)
+        }
     }
 
     struct YadiskFuseFs {
         rt: Runtime,
         index: Arc<IndexStore>,
+        bridge: Arc<YadiskFuseBridge>,
         cache_root: PathBuf,
         inodes: Arc<Mutex<InodeMap>>,
+        handles: Arc<Mutex<HandleMap>>,
         downloader: DbusDownloader,
         state_notify: Arc<(Mutex<()>, Condvar)>,
     }
@@ -204,6 +269,8 @@ mod app {
         fn new(rt: Runtime, index: IndexStore, cache_root: PathBuf) -> Self {
             let state_notify = Arc::new((Mutex::new(()), Condvar::new()));
             let inodes = Arc::new(Mutex::new(InodeMap::new()));
+            let handles = Arc::new(Mutex::new(HandleMap::default()));
+            let bridge = Arc::new(YadiskFuseBridge::new(index.clone()));
 
             // Background thread: listen for D-Bus state_changed signals and
             // wake any FUSE threads waiting in ensure_downloaded.
@@ -240,8 +307,10 @@ mod app {
             Self {
                 rt,
                 index: Arc::new(index),
+                bridge,
                 cache_root,
                 inodes,
+                handles,
                 downloader: DbusDownloader::new(),
                 state_notify,
             }
@@ -382,7 +451,9 @@ mod app {
                 Err(_) => return,
             };
             let mut state = self.current_state_for_remote_path(&remote);
-            if matches!(state, Some(FileState::Cached)) && std::fs::metadata(&cache_path).is_ok() {
+            if matches!(state, Some(FileState::Cached | FileState::Syncing))
+                && std::fs::metadata(&cache_path).is_ok()
+            {
                 return;
             }
             eprintln!("[yadisk-fuse] on-demand download requested: {remote}");
@@ -397,7 +468,7 @@ mod app {
             loop {
                 state = self.current_state_for_remote_path(&remote);
                 let cache_exists = std::fs::metadata(&cache_path).is_ok();
-                if matches!(state, Some(FileState::Cached)) && cache_exists {
+                if matches!(state, Some(FileState::Cached | FileState::Syncing)) && cache_exists {
                     eprintln!("[yadisk-fuse] on-demand download completed: {remote}");
                     return;
                 }
@@ -446,6 +517,109 @@ mod app {
             }
 
             None
+        }
+
+        fn cache_path(&self, path: &str) -> Result<PathBuf, i32> {
+            cache_path_for(&self.cache_root, path).map_err(|_| EIO)
+        }
+
+        fn metadata_mtime(meta: &std::fs::Metadata) -> i64 {
+            meta.modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or_else(now_unix)
+        }
+
+        fn ensure_local_file_for_write(&self, path: &str, truncate: bool) -> Result<(), i32> {
+            if !truncate {
+                self.ensure_downloaded(path);
+            }
+            let cache_path = self.cache_path(path)?;
+            if let Some(parent) = cache_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|_| EIO)?;
+            }
+            if std::fs::metadata(&cache_path)
+                .map(|meta| meta.is_dir())
+                .unwrap_or(false)
+            {
+                return Err(EISDIR);
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(truncate)
+                .open(&cache_path)
+                .map_err(|_| EIO)?;
+            drop(file);
+            let meta = std::fs::metadata(&cache_path).map_err(|_| EIO)?;
+            let modified = Self::metadata_mtime(&meta);
+            self.rt
+                .block_on(self.bridge.stage_write(path, meta.len() as i64, modified))
+                .map_err(|_| EIO)?;
+            Ok(())
+        }
+
+        fn sync_written_file(&self, path: &str) -> Result<(), i32> {
+            let cache_path = self.cache_path(path)?;
+            let meta = std::fs::metadata(&cache_path).map_err(|_| EIO)?;
+            let modified = Self::metadata_mtime(&meta);
+            self.rt
+                .block_on(self.bridge.write_flush(path, meta.len() as i64, modified))
+                .map_err(|_| EIO)?;
+            Ok(())
+        }
+
+        fn path_for_handle(&self, ino: u64, fh: u64) -> Option<String> {
+            self.handles
+                .lock()
+                .ok()
+                .and_then(|handles| handles.get(fh).map(|handle| handle.path.clone()))
+                .or_else(|| self.path_from_ino(ino))
+        }
+
+        fn mark_handle_dirty(&self, fh: u64) {
+            if let Ok(mut handles) = self.handles.lock()
+                && let Some(handle) = handles.get_mut(fh)
+            {
+                handle.dirty = true;
+            }
+        }
+
+        fn flush_handle_if_dirty(&self, fh: u64) -> Result<(), i32> {
+            let path = {
+                let mut handles = self.handles.lock().map_err(|_| EIO)?;
+                let Some(handle) = handles.get_mut(fh) else {
+                    return Ok(());
+                };
+                if !handle.dirty {
+                    return Ok(());
+                }
+                handle.dirty = false;
+                handle.path.clone()
+            };
+            self.sync_written_file(&path)
+        }
+
+        fn rename_cached_path(&self, from: &str, to: &str) -> Result<(), i32> {
+            let from_cache = self.cache_path(from)?;
+            let to_cache = self.cache_path(to)?;
+            if std::fs::metadata(&from_cache).is_err() {
+                self.ensure_downloaded(from);
+            }
+            if let Some(parent) = to_cache.parent() {
+                std::fs::create_dir_all(parent).map_err(|_| EIO)?;
+            }
+            if std::fs::metadata(&from_cache).is_ok() {
+                let target_meta = std::fs::metadata(&to_cache).ok();
+                if target_meta.as_ref().is_some_and(|meta| meta.is_dir()) {
+                    let _ = std::fs::remove_dir_all(&to_cache);
+                } else if target_meta.is_some() {
+                    let _ = std::fs::remove_file(&to_cache);
+                }
+                std::fs::rename(&from_cache, &to_cache).map_err(|_| EIO)?;
+            }
+            Ok(())
         }
     }
 
@@ -539,11 +713,89 @@ mod app {
         }
 
         fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
-            if self.path_from_ino(ino).is_none() {
+            let Some(path) = self.path_from_ino(ino) else {
                 reply.error(ENOENT);
                 return;
+            };
+            let writable = matches!(_flags & O_ACCMODE, O_WRONLY | O_RDWR);
+            if writable
+                && let Err(err) = self.ensure_local_file_for_write(&path, _flags & O_TRUNC != 0)
+            {
+                reply.error(err);
+                return;
             }
-            reply.opened(0, 0);
+            let fh = if writable {
+                match self.handles.lock() {
+                    Ok(mut handles) => handles.allocate(path),
+                    Err(_) => {
+                        reply.error(EIO);
+                        return;
+                    }
+                }
+            } else {
+                0
+            };
+            reply.opened(fh, 0);
+        }
+
+        fn create(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            flags: i32,
+            reply: ReplyCreate,
+        ) {
+            let Some(parent_path) = self.path_from_ino(parent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let path = Self::child_path(&parent_path, name);
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            if let Some(parent) = cache_path.parent()
+                && std::fs::create_dir_all(parent).is_err()
+            {
+                reply.error(EIO);
+                return;
+            }
+            if OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&cache_path)
+                .is_err()
+            {
+                reply.error(EIO);
+                return;
+            }
+            if self
+                .rt
+                .block_on(self.bridge.create_file(&path, now_unix()))
+                .is_err()
+            {
+                reply.error(EIO);
+                return;
+            }
+            let Some(attr) = self.item_attr(&path) else {
+                reply.error(EIO);
+                return;
+            };
+            let fh = match self.handles.lock() {
+                Ok(mut handles) => handles.allocate(path),
+                Err(_) => {
+                    reply.error(EIO);
+                    return;
+                }
+            };
+            reply.created(&TTL, &attr, 0, fh, flags as u32);
         }
 
         fn read(
@@ -588,6 +840,314 @@ mod app {
                     }
                     reply.data(&buf[..read]);
                 }
+                Err(_) => reply.error(EIO),
+            }
+        }
+
+        fn write(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            data: &[u8],
+            _write_flags: u32,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            reply: ReplyWrite,
+        ) {
+            let Some(path) = self.path_for_handle(ino, fh) else {
+                reply.error(ENOENT);
+                return;
+            };
+            if let Err(err) = self.ensure_local_file_for_write(&path, false) {
+                reply.error(err);
+                return;
+            }
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            use std::io::{Seek, SeekFrom, Write};
+            let result = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&cache_path)
+                .and_then(|mut file| {
+                    file.seek(SeekFrom::Start(offset.max(0) as u64))?;
+                    file.write_all(data)?;
+                    file.flush()?;
+                    Ok(())
+                });
+            if result.is_err() {
+                reply.error(EIO);
+                return;
+            }
+            let meta = match std::fs::metadata(&cache_path) {
+                Ok(meta) => meta,
+                Err(_) => {
+                    reply.error(EIO);
+                    return;
+                }
+            };
+            let modified = Self::metadata_mtime(&meta);
+            if self
+                .rt
+                .block_on(self.bridge.stage_write(&path, meta.len() as i64, modified))
+                .is_err()
+            {
+                reply.error(EIO);
+                return;
+            }
+            self.mark_handle_dirty(fh);
+            reply.written(data.len() as u32);
+        }
+
+        fn flush(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            fh: u64,
+            _lock_owner: u64,
+            reply: ReplyEmpty,
+        ) {
+            match self.flush_handle_if_dirty(fh) {
+                Ok(()) => reply.ok(),
+                Err(err) => reply.error(err),
+            }
+        }
+
+        fn release(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            fh: u64,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            _flush: bool,
+            reply: ReplyEmpty,
+        ) {
+            let result = self.flush_handle_if_dirty(fh);
+            if let Ok(mut handles) = self.handles.lock() {
+                handles.remove(fh);
+            }
+            match result {
+                Ok(()) => reply.ok(),
+                Err(err) => reply.error(err),
+            }
+        }
+
+        fn setattr(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _mode: Option<u32>,
+            _uid: Option<u32>,
+            _gid: Option<u32>,
+            size: Option<u64>,
+            _atime: Option<fuser::TimeOrNow>,
+            _mtime: Option<fuser::TimeOrNow>,
+            _ctime: Option<SystemTime>,
+            fh: Option<u64>,
+            _crtime: Option<SystemTime>,
+            _chgtime: Option<SystemTime>,
+            _bkuptime: Option<SystemTime>,
+            _flags: Option<u32>,
+            reply: ReplyAttr,
+        ) {
+            let Some(path) = fh
+                .and_then(|fh| self.path_for_handle(ino, fh))
+                .or_else(|| self.path_from_ino(ino))
+            else {
+                reply.error(ENOENT);
+                return;
+            };
+            let Some(size) = size else {
+                if let Some(attr) = self.item_attr(&path) {
+                    reply.attr(&TTL, &attr);
+                } else {
+                    reply.error(ENOENT);
+                }
+                return;
+            };
+            if let Err(err) = self.ensure_local_file_for_write(&path, false) {
+                reply.error(err);
+                return;
+            }
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&cache_path);
+            let Ok(file) = file else {
+                reply.error(EIO);
+                return;
+            };
+            if file.set_len(size).is_err() {
+                reply.error(EIO);
+                return;
+            }
+            let meta = match std::fs::metadata(&cache_path) {
+                Ok(meta) => meta,
+                Err(_) => {
+                    reply.error(EIO);
+                    return;
+                }
+            };
+            let modified = Self::metadata_mtime(&meta);
+            if self
+                .rt
+                .block_on(self.bridge.stage_write(&path, size as i64, modified))
+                .is_err()
+            {
+                reply.error(EIO);
+                return;
+            }
+            if let Some(fh) = fh {
+                self.mark_handle_dirty(fh);
+            }
+            if let Some(attr) = self.item_attr(&path) {
+                reply.attr(&TTL, &attr);
+            } else {
+                reply.error(EIO);
+            }
+        }
+
+        fn mkdir(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            reply: ReplyEntry,
+        ) {
+            let Some(parent_path) = self.path_from_ino(parent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let path = Self::child_path(&parent_path, name);
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            if std::fs::create_dir_all(&cache_path).is_err() {
+                reply.error(EIO);
+                return;
+            }
+            if self.rt.block_on(self.bridge.mkdir(&path)).is_err() {
+                reply.error(EIO);
+                return;
+            }
+            if let Some(attr) = self.item_attr(&path) {
+                reply.entry(&TTL, &attr, 0);
+            } else {
+                reply.error(EIO);
+            }
+        }
+
+        fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+            let Some(parent_path) = self.path_from_ino(parent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let path = Self::child_path(&parent_path, name);
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            if std::fs::metadata(&cache_path)
+                .map(|meta| meta.is_dir())
+                .unwrap_or(false)
+            {
+                reply.error(EISDIR);
+                return;
+            }
+            if std::fs::metadata(&cache_path).is_ok() {
+                let _ = std::fs::remove_file(&cache_path);
+            }
+            match self.rt.block_on(self.bridge.unlink_or_rmdir(&path)) {
+                Ok(()) => reply.ok(),
+                Err(FuseBridgeError::NotFound(_)) => reply.error(ENOENT),
+                Err(_) => reply.error(EIO),
+            }
+        }
+
+        fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+            let Some(parent_path) = self.path_from_ino(parent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let path = Self::child_path(&parent_path, name);
+            let cache_path = match self.cache_path(&path) {
+                Ok(path) => path,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            if std::fs::metadata(&cache_path)
+                .map(|meta| !meta.is_dir())
+                .unwrap_or(false)
+            {
+                reply.error(ENOTDIR);
+                return;
+            }
+            if std::fs::metadata(&cache_path).is_ok() {
+                let _ = std::fs::remove_dir_all(&cache_path);
+            }
+            match self.rt.block_on(self.bridge.unlink_or_rmdir(&path)) {
+                Ok(()) => reply.ok(),
+                Err(FuseBridgeError::NotFound(_)) => reply.error(ENOENT),
+                Err(_) => reply.error(EIO),
+            }
+        }
+
+        fn rename(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            newparent: u64,
+            newname: &OsStr,
+            _flags: u32,
+            reply: ReplyEmpty,
+        ) {
+            let Some(parent_path) = self.path_from_ino(parent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let Some(new_parent_path) = self.path_from_ino(newparent) else {
+                reply.error(ENOENT);
+                return;
+            };
+            let from = Self::child_path(&parent_path, name);
+            let to = Self::child_path(&new_parent_path, newname);
+            if let Err(err) = self.rename_cached_path(&from, &to) {
+                reply.error(err);
+                return;
+            }
+            match self.rt.block_on(self.bridge.rename(&from, &to)) {
+                Ok(()) => reply.ok(),
+                Err(FuseBridgeError::NotFound(_)) => reply.error(ENOENT),
+                Err(FuseBridgeError::InvalidPath(_)) => reply.error(EIO),
                 Err(_) => reply.error(EIO),
             }
         }

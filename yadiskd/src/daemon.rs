@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
 use md5::Context as Md5Context;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use yadisk_core::YadiskClient;
@@ -22,7 +22,6 @@ use crate::storage::TokenStorage;
 use crate::sync::engine::{EngineError, SyncEngine};
 use crate::sync::index::{FileState, IndexStore};
 use crate::sync::local_watcher::{LocalEvent, start_notify_watcher};
-#[cfg(test)]
 use crate::token_provider::TokenProvider;
 use crate::tray::{TraySyncState, start_status_tray};
 use yadisk_integrations::preferences::{load_ui_preferences, resolve_effective_language};
@@ -113,13 +112,20 @@ impl DaemonRuntime {
             .await
             .with_context(|| format!("failed to create cache root at {:?}", config.cache_root))?;
 
-        let token = resolve_valid_token(None).await?;
-        let auth_ready = Arc::new(AtomicBool::new(!token.trim().is_empty()));
-        let client = YadiskClient::new(token)?;
+        let oauth_state = resolve_oauth_state().await?;
+        let auth_ready = Arc::new(AtomicBool::new(!oauth_state.access_token.trim().is_empty()));
+        let client = YadiskClient::new(oauth_state.access_token.clone())?;
+        let token_provider = Arc::new(AsyncMutex::new(TokenProvider::new(
+            oauth_state,
+            oauth_client_from_env(),
+        )));
         let index = IndexStore::new_default()
             .await
             .context("failed to initialize index store")?;
-        let engine = Arc::new(SyncEngine::new(client, index, config.cache_root.clone()));
+        let engine = Arc::new(
+            SyncEngine::new(client, index, config.cache_root.clone())
+                .with_token_provider(token_provider),
+        );
 
         Ok(Self {
             config,
@@ -185,6 +191,8 @@ impl DaemonRuntime {
         let sync_root_available = Arc::new(AtomicBool::new(
             is_sync_root_available(&self.config.sync_root).await,
         ));
+        let sync_root_generation = Arc::new(AtomicU64::new(0));
+        let materialize_refresh_requested = Arc::new(AtomicBool::new(false));
         let cloud_sync_error = Arc::new(AtomicBool::new(false));
         let cloud_space_low = Arc::new(AtomicBool::new(false));
         let network_available = Arc::new(AtomicBool::new(true));
@@ -195,19 +203,84 @@ impl DaemonRuntime {
             );
         }
 
-        let (watcher, mut local_rx): (
-            Option<notify::RecommendedWatcher>,
-            Option<mpsc::UnboundedReceiver<LocalEvent>>,
-        ) = if self.config.enable_local_watcher {
-            match start_notify_watcher(&self.config.sync_root).ok() {
-                Some((watcher, rx)) => (Some(watcher), Some(rx)),
-                None => {
-                    eprintln!("[yadiskd] warning: failed to start local watcher");
-                    (None, None)
+        let (local_tx, local_rx) = mpsc::unbounded_channel::<LocalEvent>();
+        let watcher_handle = if self.config.enable_local_watcher {
+            let watcher_sync_root = self.config.sync_root.clone();
+            let sync_root_available_watcher = Arc::clone(&sync_root_available);
+            let sync_root_generation_watcher = Arc::clone(&sync_root_generation);
+            let shutdown_watcher = shutdown.child_token();
+            Some(tokio::spawn(async move {
+                let mut watcher: Option<(
+                    notify::RecommendedWatcher,
+                    mpsc::UnboundedReceiver<LocalEvent>,
+                )> = None;
+                let mut watcher_generation = sync_root_generation_watcher.load(Ordering::SeqCst);
+                let mut warned = false;
+                loop {
+                    if shutdown_watcher.is_cancelled() {
+                        break;
+                    }
+                    let current_generation = sync_root_generation_watcher.load(Ordering::SeqCst);
+                    if current_generation != watcher_generation {
+                        watcher = None;
+                        watcher_generation = current_generation;
+                    }
+                    if !sync_root_available_watcher.load(Ordering::SeqCst) {
+                        watcher = None;
+                        warned = false;
+                        if sleep_or_shutdown(&shutdown_watcher, Duration::from_secs(1)).await {
+                            break;
+                        }
+                        continue;
+                    }
+                    if watcher.is_none() {
+                        match start_notify_watcher(&watcher_sync_root) {
+                            Ok(bundle) => {
+                                watcher = Some(bundle);
+                                warned = false;
+                            }
+                            Err(err) => {
+                                if !warned {
+                                    eprintln!(
+                                        "[yadiskd] warning: failed to start local watcher: {err}"
+                                    );
+                                    warned = true;
+                                }
+                                if sleep_or_shutdown(&shutdown_watcher, Duration::from_secs(2))
+                                    .await
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    let Some((_, rx)) = watcher.as_mut() else {
+                        continue;
+                    };
+                    tokio::select! {
+                        _ = shutdown_watcher.cancelled() => break,
+                        event = rx.recv() => match event {
+                            Some(event) => {
+                                let _ = local_tx.send(event);
+                            }
+                            None => {
+                                watcher = None;
+                            }
+                        },
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                            if !sync_root_available_watcher.load(Ordering::SeqCst)
+                                || sync_root_generation_watcher.load(Ordering::SeqCst)
+                                    != watcher_generation
+                            {
+                                watcher = None;
+                            }
+                        }
+                    }
                 }
-            }
+            }))
         } else {
-            (None, None)
+            None
         };
 
         let engine_for_cloud = Arc::clone(&self.engine);
@@ -318,6 +391,7 @@ impl DaemonRuntime {
         let materialize_remote_root = self.config.remote_root.clone();
         let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
         let sync_root_available_materialize = Arc::clone(&sync_root_available);
+        let materialize_refresh_requested_materialize = Arc::clone(&materialize_refresh_requested);
         let auth_ready_materialize = Arc::clone(&self.auth_ready);
         let shutdown_materialize = shutdown.child_token();
         let materialize_handle = tokio::spawn(async move {
@@ -337,10 +411,16 @@ impl DaemonRuntime {
                 if !auth_ready_materialize.load(Ordering::SeqCst)
                     || !sync_root_available_materialize.load(Ordering::SeqCst)
                 {
+                    local_events_enabled_materialize.store(false, Ordering::SeqCst);
                     if sleep_or_shutdown(&shutdown_materialize, Duration::from_secs(1)).await {
                         break;
                     }
                     continue;
+                }
+                if materialize_refresh_requested_materialize.swap(false, Ordering::SeqCst) {
+                    initial_logged = false;
+                    previous_materialized_paths.clear();
+                    local_events_enabled_materialize.store(false, Ordering::SeqCst);
                 }
                 match materialize_sync_tree(
                     &engine_for_materialize,
@@ -384,7 +464,7 @@ impl DaemonRuntime {
                         }
                     }
                     Err(err) => {
-                        local_events_enabled_materialize.store(true, Ordering::SeqCst);
+                        local_events_enabled_materialize.store(false, Ordering::SeqCst);
                         if error_contains_enosys(&err) {
                             eprintln!(
                                 "[yadiskd] materialization disabled: filesystem does not support required write operations"
@@ -404,32 +484,55 @@ impl DaemonRuntime {
         let engine_for_storage = Arc::clone(&self.engine);
         let storage_sync_root = self.config.sync_root.clone();
         let sync_root_available_storage = Arc::clone(&sync_root_available);
+        let sync_root_generation_storage = Arc::clone(&sync_root_generation);
         let local_events_enabled_storage = Arc::clone(&local_events_enabled);
+        let materialize_refresh_requested_storage = Arc::clone(&materialize_refresh_requested);
         let shutdown_storage = shutdown.child_token();
         let storage_handle = tokio::spawn(async move {
             let mut known = sync_root_available_storage.load(Ordering::SeqCst);
+            let mut known_identity = if known {
+                sync_root_identity(&storage_sync_root).await
+            } else {
+                None
+            };
             loop {
                 if shutdown_storage.is_cancelled() {
                     break;
                 }
-                let available = is_sync_root_available(&storage_sync_root).await;
-                if available != known {
+                let current_identity = sync_root_identity(&storage_sync_root).await;
+                let available = current_identity.is_some();
+                let refresh_required =
+                    should_refresh_materialized_sync_root(known_identity, current_identity);
+                if available != known || refresh_required {
                     sync_root_available_storage.store(available, Ordering::SeqCst);
                     if available {
-                        eprintln!(
-                            "[yadiskd] sync root restored: {}",
-                            storage_sync_root.display()
-                        );
-                        local_events_enabled_storage.store(true, Ordering::SeqCst);
+                        if known {
+                            eprintln!(
+                                "[yadiskd] sync root replaced, refreshing local snapshot: {}",
+                                storage_sync_root.display()
+                            );
+                        } else {
+                            eprintln!(
+                                "[yadiskd] sync root restored: {}",
+                                storage_sync_root.display()
+                            );
+                        }
+                        local_events_enabled_storage.store(false, Ordering::SeqCst);
+                        materialize_refresh_requested_storage.store(true, Ordering::SeqCst);
+                        sync_root_generation_storage.fetch_add(1, Ordering::SeqCst);
                     } else {
                         eprintln!(
                             "[yadiskd] sync root unavailable, pausing local operations: {}",
                             storage_sync_root.display()
                         );
                         local_events_enabled_storage.store(false, Ordering::SeqCst);
+                        materialize_refresh_requested_storage.store(false, Ordering::SeqCst);
                         engine_for_storage.cancel_all_transfers();
                     }
                     known = available;
+                    known_identity = current_identity;
+                } else {
+                    known_identity = current_identity;
                 }
                 if sleep_or_shutdown(&shutdown_storage, Duration::from_secs(2)).await {
                     break;
@@ -616,7 +719,8 @@ impl DaemonRuntime {
             }
         });
 
-        let local_handle = if let Some(mut rx) = local_rx.take() {
+        let local_handle = if self.config.enable_local_watcher {
+            let mut rx = local_rx;
             let engine_for_local = Arc::clone(&self.engine);
             let local_sync_root = self.config.sync_root.clone();
             let local_cache_root = self.config.cache_root.clone();
@@ -698,7 +802,6 @@ impl DaemonRuntime {
             None
         };
 
-        let _watcher = watcher;
         tokio::select! {
             res = tokio::signal::ctrl_c() => {
                 res.context("failed waiting for shutdown signal")?;
@@ -719,6 +822,9 @@ impl DaemonRuntime {
         shutdown_task("storage", storage_handle).await;
         shutdown_task("eviction", eviction_handle).await;
         shutdown_task("signals", signal_handle).await;
+        if let Some(handle) = watcher_handle {
+            shutdown_task("watcher", handle).await;
+        }
         if let Some(handle) = local_handle {
             shutdown_task("local-events", handle).await;
         }

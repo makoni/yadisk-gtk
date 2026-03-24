@@ -111,9 +111,6 @@ fn is_ignored_temp_path(path: &Path) -> bool {
 fn map_created_path(root: &Path, path: &Path) -> Option<LocalEvent> {
     let remote = to_remote_path(root, path)?;
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if meta.file_type().is_symlink() {
-        return None;
-    }
     if meta.is_dir() {
         Some(LocalEvent::Mkdir { path: remote })
     } else {
@@ -124,7 +121,7 @@ fn map_created_path(root: &Path, path: &Path) -> Option<LocalEvent> {
 fn map_modified_path(root: &Path, path: &Path) -> Option<LocalEvent> {
     let remote = to_remote_path(root, path)?;
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if meta.file_type().is_symlink() || meta.is_dir() {
+    if meta.is_dir() {
         return None;
     }
     Some(LocalEvent::Upload { path: remote })
@@ -292,6 +289,54 @@ mod tests {
             mapped,
             vec![LocalEvent::Upload {
                 path: "/Docs/A.txt".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn maps_symlink_create_event_to_upload_for_explicit_engine_rejection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let target = root.join("target.txt");
+        let link = root.join("Docs/link.txt");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"x").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![link],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert_eq!(
+            mapped,
+            vec![LocalEvent::Upload {
+                path: "/Docs/link.txt".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn maps_symlink_modify_event_to_upload_for_explicit_engine_rejection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let target = root.join("target.txt");
+        let link = root.join("Docs/link.txt");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"x").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let event = Event {
+            kind: EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            paths: vec![link],
+            attrs: Default::default(),
+        };
+        let mapped = map_event(root, event);
+        assert_eq!(
+            mapped,
+            vec![LocalEvent::Upload {
+                path: "/Docs/link.txt".into()
             }]
         );
     }
