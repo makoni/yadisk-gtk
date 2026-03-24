@@ -24,12 +24,15 @@ mod app {
     use zbus::blocking::{Connection, Proxy};
 
     const TTL: Duration = Duration::from_secs(1);
+    const MAX_INODE_CACHE_ENTRIES: usize = 100_000;
 
     struct InodeMap {
         next: u64,
         path_to_ino: HashMap<String, u64>,
         ino_to_path: HashMap<u64, String>,
         refcounts: HashMap<u64, u64>,
+        last_touched: HashMap<u64, u64>,
+        touch_clock: u64,
     }
 
     impl InodeMap {
@@ -37,30 +40,43 @@ mod app {
             let mut path_to_ino = HashMap::new();
             let mut ino_to_path = HashMap::new();
             let mut refcounts = HashMap::new();
+            let mut last_touched = HashMap::new();
             path_to_ino.insert("/".to_string(), 1);
             ino_to_path.insert(1, "/".to_string());
             refcounts.insert(1, u64::MAX); // root inode is never forgotten
+            last_touched.insert(1, 1);
             Self {
                 next: 2,
                 path_to_ino,
                 ino_to_path,
                 refcounts,
+                last_touched,
+                touch_clock: 1,
             }
         }
 
+        fn touch(&mut self, ino: u64) {
+            self.touch_clock = self.touch_clock.saturating_add(1);
+            self.last_touched.insert(ino, self.touch_clock);
+        }
+
         fn inode_for(&mut self, path: &str) -> u64 {
-            if let Some(existing) = self.path_to_ino.get(path) {
-                return *existing;
+            if let Some(existing) = self.path_to_ino.get(path).copied() {
+                self.touch(existing);
+                return existing;
             }
             let ino = self.next;
             self.next += 1;
             self.path_to_ino.insert(path.to_string(), ino);
             self.ino_to_path.insert(ino, path.to_string());
+            self.touch(ino);
+            let _ = self.gc_unreferenced(MAX_INODE_CACHE_ENTRIES);
             ino
         }
 
         fn inc_ref(&mut self, ino: u64) {
             *self.refcounts.entry(ino).or_insert(0) += 1;
+            self.touch(ino);
         }
 
         fn forget(&mut self, ino: u64, nlookup: u64) {
@@ -74,12 +90,82 @@ mod app {
                 if let Some(path) = self.ino_to_path.remove(&ino) {
                     self.path_to_ino.remove(&path);
                 }
+                self.last_touched.remove(&ino);
             }
         }
 
-        fn path_for(&self, ino: u64) -> Option<String> {
-            self.ino_to_path.get(&ino).cloned()
+        fn prune_unreferenced(&mut self) -> usize {
+            let stale: Vec<(u64, String)> = self
+                .ino_to_path
+                .iter()
+                .filter_map(|(ino, path)| {
+                    if *ino == 1 || self.refcounts.get(ino).copied().unwrap_or(0) != 0 {
+                        None
+                    } else {
+                        Some((*ino, path.clone()))
+                    }
+                })
+                .collect();
+            for (ino, path) in &stale {
+                self.ino_to_path.remove(ino);
+                self.path_to_ino.remove(path);
+                self.last_touched.remove(ino);
+            }
+            stale.len()
         }
+
+        fn gc_unreferenced(&mut self, limit: usize) -> usize {
+            if self.path_to_ino.len() <= limit {
+                return 0;
+            }
+            let mut stale: Vec<(u64, String, u64)> = self
+                .ino_to_path
+                .iter()
+                .filter_map(|(ino, path)| {
+                    if *ino == 1 || self.refcounts.get(ino).copied().unwrap_or(0) != 0 {
+                        None
+                    } else {
+                        Some((
+                            *ino,
+                            path.clone(),
+                            self.last_touched.get(ino).copied().unwrap_or(0),
+                        ))
+                    }
+                })
+                .collect();
+            stale.sort_by_key(|(_, _, last_touched)| *last_touched);
+            let to_remove = self.path_to_ino.len().saturating_sub(limit);
+            let mut removed = 0usize;
+            for (ino, path, _) in stale.into_iter().take(to_remove) {
+                self.ino_to_path.remove(&ino);
+                self.path_to_ino.remove(&path);
+                self.last_touched.remove(&ino);
+                removed += 1;
+            }
+            removed
+        }
+
+        fn path_for(&mut self, ino: u64) -> Option<String> {
+            let path = self.ino_to_path.get(&ino).cloned();
+            if path.is_some() {
+                self.touch(ino);
+            }
+            path
+        }
+    }
+
+    fn refresh_after_reconnect(
+        inodes: &Arc<Mutex<InodeMap>>,
+        state_notify: &Arc<(Mutex<()>, Condvar)>,
+    ) {
+        let pruned = inodes
+            .lock()
+            .map(|mut inodes| inodes.prune_unreferenced())
+            .unwrap_or(0);
+        if pruned != 0 {
+            eprintln!("[yadisk-fuse] pruned {pruned} stale inode mappings after D-Bus reconnect");
+        }
+        state_notify.1.notify_all();
     }
 
     struct DbusDownloader;
@@ -109,7 +195,7 @@ mod app {
         rt: Runtime,
         index: Arc<IndexStore>,
         cache_root: PathBuf,
-        inodes: Mutex<InodeMap>,
+        inodes: Arc<Mutex<InodeMap>>,
         downloader: DbusDownloader,
         state_notify: Arc<(Mutex<()>, Condvar)>,
     }
@@ -117,10 +203,12 @@ mod app {
     impl YadiskFuseFs {
         fn new(rt: Runtime, index: IndexStore, cache_root: PathBuf) -> Self {
             let state_notify = Arc::new((Mutex::new(()), Condvar::new()));
+            let inodes = Arc::new(Mutex::new(InodeMap::new()));
 
             // Background thread: listen for D-Bus state_changed signals and
             // wake any FUSE threads waiting in ensure_downloaded.
             let notify = Arc::clone(&state_notify);
+            let inodes_for_signals = Arc::clone(&inodes);
             std::thread::spawn(move || {
                 loop {
                     let Ok(connection) = Connection::session() else {
@@ -140,6 +228,7 @@ mod app {
                         std::thread::sleep(Duration::from_secs(5));
                         continue;
                     };
+                    refresh_after_reconnect(&inodes_for_signals, &notify);
                     for _signal in signals {
                         notify.1.notify_all();
                     }
@@ -152,7 +241,7 @@ mod app {
                 rt,
                 index: Arc::new(index),
                 cache_root,
-                inodes: Mutex::new(InodeMap::new()),
+                inodes,
                 downloader: DbusDownloader::new(),
                 state_notify,
             }
@@ -486,7 +575,14 @@ mod app {
             }
             let mut buf = vec![0u8; size as usize];
             match file.read(&mut buf) {
-                Ok(read) => reply.data(&buf[..read]),
+                Ok(read) => {
+                    if read > 0 {
+                        let _ = self
+                            .rt
+                            .block_on(self.index.touch_accessed_by_path(&path, now_unix()));
+                    }
+                    reply.data(&buf[..read]);
+                }
                 Err(_) => reply.error(EIO),
             }
         }
@@ -521,10 +617,10 @@ mod app {
     fn parse_mountpoint() -> anyhow::Result<PathBuf> {
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
-            if arg == "--mount" {
-                if let Some(path) = args.next() {
-                    return Ok(PathBuf::from(path));
-                }
+            if arg == "--mount"
+                && let Some(path) = args.next()
+            {
+                return Ok(PathBuf::from(path));
             }
         }
         anyhow::bail!("usage: yadisk-fuse --mount <path>")
@@ -581,6 +677,81 @@ mod app {
 
     fn unix_to_system_time(ts: i64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(ts.max(0) as u64)
+    }
+
+    fn now_unix() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn prune_unreferenced_removes_only_inactive_inodes() {
+            let mut inodes = InodeMap::new();
+            let active = inodes.inode_for("/Docs/A.txt");
+            inodes.inc_ref(active);
+            let stale = inodes.inode_for("/Docs/B.txt");
+
+            assert_eq!(inodes.prune_unreferenced(), 1);
+            assert_eq!(inodes.path_for(1).as_deref(), Some("/"));
+            assert_eq!(inodes.path_for(active).as_deref(), Some("/Docs/A.txt"));
+            assert_eq!(inodes.path_for(stale), None);
+        }
+
+        #[test]
+        fn refresh_after_reconnect_prunes_stale_inode_cache() {
+            let inodes = Arc::new(Mutex::new(InodeMap::new()));
+            let state_notify = Arc::new((Mutex::new(()), Condvar::new()));
+
+            let (active, stale) = {
+                let mut guard = inodes.lock().unwrap();
+                let active = guard.inode_for("/Docs/A.txt");
+                guard.inc_ref(active);
+                let stale = guard.inode_for("/Docs/B.txt");
+                (active, stale)
+            };
+
+            refresh_after_reconnect(&inodes, &state_notify);
+
+            let mut guard = inodes.lock().unwrap();
+            assert_eq!(guard.path_for(1).as_deref(), Some("/"));
+            assert_eq!(guard.path_for(active).as_deref(), Some("/Docs/A.txt"));
+            assert_eq!(guard.path_for(stale), None);
+        }
+
+        #[test]
+        fn gc_unreferenced_evicts_oldest_unused_inodes_first() {
+            let mut inodes = InodeMap::new();
+            let oldest = inodes.inode_for("/Docs/A.txt");
+            let _middle = inodes.inode_for("/Docs/B.txt");
+            let newest = inodes.inode_for("/Docs/C.txt");
+
+            assert_eq!(inodes.gc_unreferenced(3), 1);
+            assert_eq!(inodes.path_for(oldest), None);
+            assert_eq!(inodes.path_for(newest).as_deref(), Some("/Docs/C.txt"));
+        }
+
+        #[test]
+        fn gc_unreferenced_keeps_referenced_inodes() {
+            let mut inodes = InodeMap::new();
+            let active = inodes.inode_for("/Docs/A.txt");
+            inodes.inc_ref(active);
+            let oldest_unused = inodes.inode_for("/Docs/B.txt");
+            let newest_unused = inodes.inode_for("/Docs/C.txt");
+
+            assert_eq!(inodes.gc_unreferenced(3), 1);
+            assert_eq!(inodes.path_for(active).as_deref(), Some("/Docs/A.txt"));
+            assert_eq!(inodes.path_for(oldest_unused), None);
+            assert_eq!(
+                inodes.path_for(newest_unused).as_deref(),
+                Some("/Docs/C.txt")
+            );
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use super::*;
 use crate::storage::OAuthState;
-use crate::sync::index::{FileState, IndexStore, ItemInput, ItemType};
+use crate::sync::index::{FileState, IndexStore, ItemInput, ItemType, StateMeta};
 use crate::sync::local_watcher::LocalEvent;
 use sqlx::SqlitePool;
 use tempfile::tempdir;
@@ -111,6 +111,53 @@ fn effective_tray_state_recovers_after_cloud_error_clears() {
         effective_tray_state(&states, false, true, false),
         TraySyncState::Normal
     );
+}
+
+#[test]
+fn signal_snapshot_is_replayed_after_emit_failure() {
+    let known_states = HashMap::from([("/Docs/A.txt".to_string(), "cached")]);
+    let current_states = HashMap::from([("/Docs/A.txt".to_string(), "cached")]);
+
+    assert!(should_force_signal_snapshot(
+        false,
+        &known_states,
+        &current_states
+    ));
+    assert!(!should_force_signal_snapshot(
+        true,
+        &known_states,
+        &current_states
+    ));
+}
+
+#[test]
+fn signal_snapshot_is_replayed_when_previous_snapshot_is_incomplete() {
+    let known_states = HashMap::from([("/Docs/A.txt".to_string(), "cached")]);
+    let current_states = HashMap::from([
+        ("/Docs/A.txt".to_string(), "cached"),
+        ("/Docs/B.txt".to_string(), "cloud_only"),
+    ]);
+
+    assert!(should_force_signal_snapshot(
+        true,
+        &known_states,
+        &current_states
+    ));
+}
+
+#[test]
+fn signal_snapshot_is_not_replayed_when_previous_snapshot_matches() {
+    let known_states = HashMap::from([
+        ("/Docs/A.txt".to_string(), "cached"),
+        ("/Docs/B.txt".to_string(), "cloud_only"),
+    ]);
+    let current_states = known_states.clone();
+
+    assert!(!should_force_signal_snapshot(
+        true,
+        &known_states,
+        &current_states
+    ));
 }
 
 #[test]
@@ -452,11 +499,81 @@ async fn cache_eviction_skips_pinned_files() {
         .unwrap();
     let unpinned_cached = states
         .iter()
-        .filter(|(_, state, pinned)| !*pinned && matches!(state, FileState::Cached))
+        .filter(|(_, state, pinned, _)| !*pinned && matches!(state, FileState::Cached))
         .count();
     assert_eq!(unpinned_cached, 1);
     assert!(
         tokio::fs::metadata(cache_dir.path().join("B.txt"))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn cache_eviction_prefers_oldest_last_accessed_file() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let index = IndexStore::from_pool(pool);
+    index.init().await.unwrap();
+    let cache_dir = tempdir().unwrap();
+
+    for (path, last_accessed) in [
+        ("/A.txt", Some(100)),
+        ("/B.txt", Some(300)),
+        ("/C.txt", Some(200)),
+    ] {
+        let item = index
+            .upsert_item(&ItemInput {
+                path: path.to_string(),
+                parent_path: Some("/".to_string()),
+                name: path.trim_start_matches('/').to_string(),
+                item_type: ItemType::File,
+                size: Some(5),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        index
+            .set_state_with_meta(
+                item.id,
+                FileState::Cached,
+                false,
+                None,
+                StateMeta {
+                    last_accessed,
+                    ..StateMeta::default()
+                },
+            )
+            .await
+            .unwrap();
+        let local = crate::sync::paths::cache_path_for(cache_dir.path(), path).unwrap();
+        if let Some(parent) = local.parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        tokio::fs::write(local, b"12345").await.unwrap();
+    }
+
+    let client = YadiskClient::with_base_url("http://127.0.0.1:9", "token").unwrap();
+    let engine = SyncEngine::new(client, index, cache_dir.path().to_path_buf());
+    run_cache_eviction_once(&engine, cache_dir.path(), "/", 10)
+        .await
+        .unwrap();
+
+    assert!(
+        tokio::fs::metadata(cache_dir.path().join("A.txt"))
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::fs::metadata(cache_dir.path().join("B.txt"))
+            .await
+            .is_ok()
+    );
+    assert!(
+        tokio::fs::metadata(cache_dir.path().join("C.txt"))
             .await
             .is_ok()
     );

@@ -83,6 +83,10 @@ pub struct ItemRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileState {
+    /// Persisted per-item state stored in the sync index.
+    ///
+    /// `Partial` is intentionally not represented here: it is an aggregated
+    /// path display state derived from descendant items.
     CloudOnly,
     Cached,
     Syncing,
@@ -173,6 +177,7 @@ pub struct StateRecord {
     pub retry_at: Option<i64>,
     pub last_success_at: Option<i64>,
     pub last_error_at: Option<i64>,
+    pub last_accessed: Option<i64>,
     pub dirty: bool,
 }
 
@@ -181,6 +186,7 @@ pub struct StateMeta {
     pub retry_at: Option<i64>,
     pub last_success_at: Option<i64>,
     pub last_error_at: Option<i64>,
+    pub last_accessed: Option<i64>,
     pub dirty: bool,
 }
 

@@ -87,6 +87,7 @@ impl SyncEngine {
                                 retry_at: prev_state.retry_at,
                                 last_success_at: prev_state.last_success_at,
                                 last_error_at: prev_state.last_error_at,
+                                last_accessed: prev_state.last_accessed,
                                 dirty: prev_state.dirty,
                             },
                         )
@@ -466,7 +467,7 @@ impl SyncEngine {
     pub async fn list_path_states_with_pin_by_prefix(
         &self,
         prefix: &str,
-    ) -> Result<Vec<(String, FileState, bool)>, EngineError> {
+    ) -> Result<Vec<(String, FileState, bool, Option<i64>)>, EngineError> {
         Ok(self
             .index
             .list_path_states_with_pin_by_prefix(prefix)
@@ -580,6 +581,7 @@ impl SyncEngine {
                             retry_at: None,
                             last_success_at: None,
                             last_error_at: Some(now_unix()),
+                            last_accessed: None,
                             dirty: false,
                         },
                     )

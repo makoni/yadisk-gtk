@@ -66,6 +66,8 @@ pub enum PathDisplayState {
     Cached,
     Syncing,
     Error,
+    /// Aggregated view for a path that has both cached and cloud-only
+    /// descendants. This is not persisted as a `FileState`.
     Partial,
 }
 

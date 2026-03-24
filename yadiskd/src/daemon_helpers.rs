@@ -25,6 +25,18 @@ fn effective_tray_state(
     tray_state_from_states(states, has_active_work)
 }
 
+fn should_force_signal_snapshot(
+    previous_snapshot_complete: bool,
+    known_states: &HashMap<String, &'static str>,
+    current_states: &HashMap<String, &'static str>,
+) -> bool {
+    !previous_snapshot_complete
+        || known_states.len() != current_states.len()
+        || known_states
+            .iter()
+            .any(|(path, state)| current_states.get(path) != Some(state))
+}
+
 async fn resolve_valid_token(_base_url: Option<&str>) -> anyhow::Result<String> {
     match std::env::var("YADISK_TOKEN") {
         Ok(token) => Ok(token),
@@ -647,7 +659,7 @@ async fn run_cache_eviction_once(
     let mut candidates = Vec::new();
     let mut total_bytes = 0u64;
 
-    for (path, state, pinned) in engine
+    for (path, state, pinned, last_accessed) in engine
         .list_path_states_with_pin_by_prefix(remote_root)
         .await?
     {
@@ -664,9 +676,9 @@ async fn run_cache_eviction_once(
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
+            .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        candidates.push((path, local_path, size, modified));
+        candidates.push((path, local_path, size, last_accessed.unwrap_or(modified)));
     }
 
     if total_bytes <= max_bytes {

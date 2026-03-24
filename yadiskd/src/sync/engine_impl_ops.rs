@@ -28,6 +28,7 @@ impl SyncEngine {
                                 retry_at: None,
                                 last_success_at: Some(now_unix()),
                                 last_error_at: None,
+                                last_accessed: None,
                                 dirty: false,
                             },
                         )
@@ -87,6 +88,7 @@ impl SyncEngine {
                     retry_at: None,
                     last_success_at: Some(now_unix()),
                     last_error_at: None,
+                    last_accessed: None,
                     dirty: false,
                 },
             )
@@ -271,6 +273,7 @@ impl SyncEngine {
                     retry_at: None,
                     last_success_at: Some(now_unix()),
                     last_error_at: None,
+                    last_accessed: None,
                     dirty: false,
                 },
             )
@@ -382,6 +385,7 @@ impl SyncEngine {
                     retry_at: None,
                     last_success_at: Some(now_unix()),
                     last_error_at: None,
+                    last_accessed: None,
                     dirty: false,
                 },
             )
@@ -473,6 +477,7 @@ impl SyncEngine {
                             retry_at: state.retry_at,
                             last_success_at: Some(now_unix()),
                             last_error_at: state.last_error_at,
+                            last_accessed: state.last_accessed,
                             dirty: false,
                         },
                     )

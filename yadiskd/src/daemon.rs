@@ -401,6 +401,7 @@ impl DaemonRuntime {
         let cloud_sync_error_signal = Arc::clone(&cloud_sync_error);
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
+            let mut last_signal_snapshot_complete = true;
             let mut known_tray_state: Option<TraySyncState> = None;
             let mut known_tray_language: Option<String> = None;
             let mut known_daemon_state: Option<(&'static str, &'static str)> = None;
@@ -420,16 +421,33 @@ impl DaemonRuntime {
                             crate::sync::index::FileState::Syncing => "syncing",
                             crate::sync::index::FileState::Error => "error",
                         };
+                        current_states.insert(path, state_str);
+                    }
+                    let force_snapshot = should_force_signal_snapshot(
+                        last_signal_snapshot_complete,
+                        &known_states,
+                        &current_states,
+                    );
+                    let mut signal_errors = 0usize;
+                    for (path, state_str) in &current_states {
                         let changed = known_states
                             .get(path.as_str())
-                            .map(|existing| *existing != state_str)
+                            .map(|existing| *existing != *state_str)
                             .unwrap_or(true);
-                        current_states.insert(path.clone(), state_str);
-                        if changed {
-                            let _ =
-                                SyncDbusService::state_changed(&signal_emitter, &path, state_str)
-                                    .await;
+                        if (force_snapshot || changed)
+                            && let Err(err) =
+                                SyncDbusService::state_changed(&signal_emitter, path, state_str)
+                                    .await
+                        {
+                            signal_errors += 1;
+                            eprintln!("[yadiskd] failed to emit state_changed for {path}: {err}");
                         }
+                    }
+                    last_signal_snapshot_complete = signal_errors == 0;
+                    if signal_errors != 0 {
+                        eprintln!(
+                            "[yadiskd] D-Bus state snapshot incomplete, will replay on next tick"
+                        );
                     }
                     let has_active_work = engine_for_signals
                         .has_active_or_queued_work()
@@ -451,18 +469,23 @@ impl DaemonRuntime {
                         TraySyncState::Error => ("error", "sync engine reported an error"),
                     };
                     if known_daemon_state != Some(daemon_state) {
-                        let _ = ControlDbusService::daemon_status_changed(
+                        if let Err(err) = ControlDbusService::daemon_status_changed(
                             &control_signal_emitter,
                             daemon_state.0,
                             daemon_state.1,
                         )
-                        .await;
-                        known_daemon_state = Some(daemon_state);
+                        .await
+                        {
+                            eprintln!("[yadiskd] failed to emit daemon_status_changed: {err}");
+                        } else {
+                            known_daemon_state = Some(daemon_state);
+                        }
                     }
                     known_states = current_states;
                 } else if known_tray_state != Some(TraySyncState::Error) || language_changed {
                     let _ = tray_state_tx_signal.send(TraySyncState::Error);
                     known_tray_state = Some(TraySyncState::Error);
+                    last_signal_snapshot_complete = false;
                 }
                 known_tray_language = Some(tray_language);
 
@@ -472,14 +495,21 @@ impl DaemonRuntime {
                             continue;
                         }
                         let id = u64::try_from(conflict.id).unwrap_or(0);
-                        let _ = SyncDbusService::conflict_added(
+                        if let Err(err) = SyncDbusService::conflict_added(
                             &signal_emitter,
                             id,
                             &conflict.path,
                             &conflict.renamed_local,
                         )
-                        .await;
-                        last_conflict_id = conflict.id;
+                        .await
+                        {
+                            eprintln!(
+                                "[yadiskd] failed to emit conflict_added for {}: {err}",
+                                conflict.path
+                            );
+                        } else {
+                            last_conflict_id = conflict.id;
+                        }
                     }
                 }
 

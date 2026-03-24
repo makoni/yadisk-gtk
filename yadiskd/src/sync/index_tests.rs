@@ -86,6 +86,65 @@ async fn set_and_get_state() {
 }
 
 #[tokio::test]
+async fn touch_accessed_by_path_updates_last_accessed() {
+    let store = make_store().await;
+    let item = ItemInput {
+        path: "/Docs/A.txt".into(),
+        parent_path: Some("/Docs".into()),
+        name: "A.txt".into(),
+        item_type: ItemType::File,
+        size: Some(12),
+        modified: Some(1_700_000_000),
+        hash: None,
+        resource_id: None,
+        last_synced_hash: None,
+        last_synced_modified: None,
+    };
+
+    let inserted = store.upsert_item(&item).await.unwrap();
+    store
+        .set_state(inserted.id, FileState::Cached, true, Some("ok"))
+        .await
+        .unwrap();
+    store
+        .touch_accessed_by_path("disk:/Docs/A.txt", 1_700_000_123)
+        .await
+        .unwrap();
+
+    let state = store.get_state(inserted.id).await.unwrap().unwrap();
+    assert_eq!(state.last_accessed, Some(1_700_000_123));
+}
+
+#[tokio::test]
+async fn persisted_states_reject_partial_display_value() {
+    let store = make_store().await;
+    let item = store
+        .upsert_item(&ItemInput {
+            path: "/Docs/A.txt".into(),
+            parent_path: Some("/Docs".into()),
+            name: "A.txt".into(),
+            item_type: ItemType::File,
+            size: Some(12),
+            modified: Some(1_700_000_000),
+            hash: None,
+            resource_id: None,
+            last_synced_hash: None,
+            last_synced_modified: None,
+        })
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO states (item_id, state, pinned, last_error, retry_at, last_success_at, last_error_at, dirty) VALUES (?1, 'partial', 0, NULL, NULL, NULL, NULL, 0)")
+        .bind(item.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let err = store.get_state(item.id).await.unwrap_err();
+    assert!(matches!(err, IndexError::InvalidState(value) if value == "partial"));
+}
+
+#[tokio::test]
 async fn disk_prefix_queries_match_slash_paths() {
     let store = make_store().await;
     let item = store

@@ -148,7 +148,7 @@ impl IndexStore {
         meta: StateMeta,
     ) -> Result<(), IndexError> {
         sqlx::query(
-            "\n            INSERT INTO states (\n                item_id,\n                state,\n                pinned,\n                last_error,\n                retry_at,\n                last_success_at,\n                last_error_at,\n                dirty\n            )\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n            ON CONFLICT(item_id) DO UPDATE SET\n                state = excluded.state,\n                pinned = excluded.pinned,\n                last_error = excluded.last_error,\n                retry_at = excluded.retry_at,\n                last_success_at = excluded.last_success_at,\n                last_error_at = excluded.last_error_at,\n                dirty = excluded.dirty;\n            ",
+            "\n            INSERT INTO states (\n                item_id,\n                state,\n                pinned,\n                last_error,\n                retry_at,\n                last_success_at,\n                last_error_at,\n                last_accessed,\n                dirty\n            )\n            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)\n            ON CONFLICT(item_id) DO UPDATE SET\n                state = excluded.state,\n                pinned = excluded.pinned,\n                last_error = excluded.last_error,\n                retry_at = excluded.retry_at,\n                last_success_at = excluded.last_success_at,\n                last_error_at = excluded.last_error_at,\n                last_accessed = COALESCE(excluded.last_accessed, states.last_accessed),\n                dirty = excluded.dirty;\n            ",
         )
         .bind(item_id)
         .bind(state.as_str())
@@ -157,6 +157,7 @@ impl IndexStore {
         .bind(meta.retry_at)
         .bind(meta.last_success_at)
         .bind(meta.last_error_at)
+        .bind(meta.last_accessed)
         .bind(if meta.dirty { 1 } else { 0 })
         .execute(&self.pool)
         .await?;
@@ -167,7 +168,7 @@ impl IndexStore {
     pub async fn get_state(&self, item_id: i64) -> Result<Option<StateRecord>, IndexError> {
         let row =
             sqlx::query(
-                "SELECT item_id, state, pinned, last_error, retry_at, last_success_at, last_error_at, dirty FROM states WHERE item_id = ?1",
+                "SELECT item_id, state, pinned, last_error, retry_at, last_success_at, last_error_at, last_accessed, dirty FROM states WHERE item_id = ?1",
             )
                 .bind(item_id)
                 .fetch_optional(&self.pool)
@@ -189,6 +190,7 @@ impl IndexStore {
             retry_at: row.try_get("retry_at")?,
             last_success_at: row.try_get("last_success_at")?,
             last_error_at: row.try_get("last_error_at")?,
+            last_accessed: row.try_get("last_accessed")?,
             dirty: dirty != 0,
         }))
     }
@@ -226,12 +228,12 @@ impl IndexStore {
     pub async fn list_path_states_with_pin_by_prefix(
         &self,
         prefix: &str,
-    ) -> Result<Vec<(String, FileState, bool)>, IndexError> {
+    ) -> Result<Vec<(String, FileState, bool, Option<i64>)>, IndexError> {
         let [prefix_a, prefix_b] = prefix_variants(prefix);
         let pattern_a = like_pattern_for_prefix(&prefix_a);
         let pattern_b = like_pattern_for_prefix(&prefix_b);
         let rows = sqlx::query(
-            "SELECT i.path, s.state, s.pinned
+            "SELECT i.path, s.state, s.pinned, s.last_accessed
              FROM states s
              JOIN items i ON i.id = s.item_id
              WHERE i.path = ?1 OR i.path LIKE ?2 ESCAPE '\\' OR i.path = ?3 OR i.path LIKE ?4 ESCAPE '\\'
@@ -249,9 +251,31 @@ impl IndexStore {
             let path: String = row.try_get("path")?;
             let state: String = row.try_get("state")?;
             let pinned: i64 = row.try_get("pinned")?;
-            out.push((path, FileState::parse(&state)?, pinned != 0));
+            let last_accessed: Option<i64> = row.try_get("last_accessed")?;
+            out.push((path, FileState::parse(&state)?, pinned != 0, last_accessed));
         }
         Ok(out)
+    }
+
+    pub async fn touch_accessed_by_path(
+        &self,
+        path: &str,
+        accessed_at: i64,
+    ) -> Result<(), IndexError> {
+        let [candidate_a, candidate_b] = prefix_variants(path);
+        sqlx::query(
+            "UPDATE states
+             SET last_accessed = ?1
+             WHERE item_id IN (
+                 SELECT id FROM items WHERE path = ?2 OR path = ?3
+             )",
+        )
+        .bind(accessed_at)
+        .bind(candidate_a)
+        .bind(candidate_b)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn list_pinned_cloud_only_paths_by_prefix(
@@ -376,6 +400,7 @@ impl IndexStore {
                     retry_at: Some(retry_at),
                     last_success_at: None,
                     last_error_at: Some(now),
+                    last_accessed: None,
                     dirty: true,
                 },
             )
