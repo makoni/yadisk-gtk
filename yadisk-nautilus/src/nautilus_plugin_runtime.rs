@@ -1,3 +1,5 @@
+    use std::collections::HashSet;
+
     fn sync_root() -> &'static PathBuf {
         SYNC_ROOT.get_or_init(|| {
             std::env::var("YADISK_SYNC_DIR")
@@ -40,13 +42,44 @@
         let Ok(mut cache) = state_cache().write() else {
             return;
         };
-
-        cache.insert(remote_path.to_string(), state);
-        if let Some(rest) = remote_path.strip_prefix("disk:/") {
-            cache.insert(format!("/{}", rest.trim_start_matches('/')), state);
-        } else if let Some(rest) = remote_path.strip_prefix('/') {
-            cache.insert(format!("disk:/{}", rest), state);
+        for alias in remote_path_aliases(remote_path) {
+            cache.insert(alias, state);
         }
+    }
+
+    fn apply_full_state_snapshot(
+        states: &[(String, SyncUiState)],
+        sync_root: &Path,
+    ) -> Vec<PathBuf> {
+        let new_cache = state_cache_from_snapshot(states);
+        let mut changed = HashSet::new();
+        let Ok(mut cache) = state_cache().write() else {
+            return Vec::new();
+        };
+
+        for (path, state) in states {
+            let aliases = remote_path_aliases(path);
+            let cache_changed = aliases
+                .iter()
+                .any(|alias| cache.get(alias).copied() != Some(*state));
+            if cache_changed {
+                changed.insert(map_remote_to_local_path(path, sync_root));
+            }
+        }
+
+        for existing in cache.keys() {
+            if !new_cache.contains_key(existing) {
+                let canonical = if existing.starts_with("disk:/") {
+                    existing.clone()
+                } else {
+                    format!("disk:{}", existing)
+                };
+                changed.insert(map_remote_to_local_path(&canonical, sync_root));
+            }
+        }
+
+        *cache = new_cache;
+        changed.into_iter().collect()
     }
 
     fn state_for_local_path(local_path: &Path) -> Result<SyncUiState, ExtensionError> {
@@ -113,6 +146,13 @@
                         continue;
                     }
                 };
+
+                if let Ok(snapshot) = client.get_full_state() {
+                    for local_path in apply_full_state_snapshot(&snapshot.states, sync_root()) {
+                        invalidate_file_info_for_local_path(&local_path);
+                        invalidate_parent_info_for_local_path(&local_path);
+                    }
+                }
 
                 let Ok(mut listener) = client.subscribe_signals() else {
                     thread::sleep(std::time::Duration::from_secs(5));

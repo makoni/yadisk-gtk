@@ -1,9 +1,11 @@
 use super::*;
 use crate::storage::OAuthState;
+use crate::sync::engine::EngineError;
 use crate::sync::index::{FileState, IndexStore, ItemInput, ItemType, StateMeta};
 use crate::sync::local_watcher::LocalEvent;
 use sqlx::SqlitePool;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -52,6 +54,21 @@ async fn sync_root_availability_detects_missing_dir() {
     assert!(!is_sync_root_available(dir.path()).await);
 }
 
+#[tokio::test]
+async fn sleep_or_shutdown_returns_true_when_cancelled() {
+    let shutdown = CancellationToken::new();
+    shutdown.cancel();
+
+    assert!(sleep_or_shutdown(&shutdown, Duration::from_secs(60)).await);
+}
+
+#[tokio::test]
+async fn sleep_or_shutdown_returns_false_when_delay_elapses() {
+    let shutdown = CancellationToken::new();
+
+    assert!(!sleep_or_shutdown(&shutdown, Duration::from_millis(1)).await);
+}
+
 #[test]
 fn detects_enosys_in_error_chain() {
     let err = anyhow::Error::new(std::io::Error::from_raw_os_error(38));
@@ -91,11 +108,15 @@ fn effective_tray_state_prioritizes_connectivity_guards() {
     let mut states = HashMap::new();
     states.insert("/A".to_string(), "cached");
     assert_eq!(
-        effective_tray_state(&states, true, false, false),
+        effective_tray_state(&states, true, false, true, false),
         TraySyncState::Error
     );
     assert_eq!(
-        effective_tray_state(&states, true, true, true),
+        effective_tray_state(&states, true, true, false, false),
+        TraySyncState::Error
+    );
+    assert_eq!(
+        effective_tray_state(&states, true, true, true, true),
         TraySyncState::Error
     );
 }
@@ -104,13 +125,31 @@ fn effective_tray_state_prioritizes_connectivity_guards() {
 fn effective_tray_state_recovers_after_cloud_error_clears() {
     let states = HashMap::new();
     assert_eq!(
-        effective_tray_state(&states, false, true, true),
+        effective_tray_state(&states, false, true, true, true),
         TraySyncState::Error
     );
     assert_eq!(
-        effective_tray_state(&states, false, true, false),
+        effective_tray_state(&states, false, true, true, false),
         TraySyncState::Normal
     );
+}
+
+#[test]
+fn network_availability_switches_for_online_and_offline_errors() {
+    let offline = EngineError::Api(yadisk_core::YadiskError::Api {
+        status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        body: "offline".to_string(),
+        retry_after: None,
+    });
+    let auth = EngineError::Api(yadisk_core::YadiskError::Api {
+        status: reqwest::StatusCode::UNAUTHORIZED,
+        body: "unauthorized".to_string(),
+        retry_after: None,
+    });
+
+    assert!(!next_network_availability(Err(&offline)));
+    assert!(next_network_availability(Err(&auth)));
+    assert!(next_network_availability(Ok(())));
 }
 
 #[test]

@@ -375,7 +375,7 @@ fn classify_api_status(status: StatusCode) -> ApiErrorClass {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DiskInfo {
     pub total_space: u64,
     pub used_space: u64,

@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
-use yadisk_core::{ApiErrorClass, OperationStatus, ResourceType, YadiskClient};
+use yadisk_core::{ApiErrorClass, DiskInfo, OperationStatus, ResourceType, YadiskClient};
 
 use super::backoff::Backoff;
 use super::conflict::{self, ConflictDecision, FileMetadata};
@@ -44,6 +44,8 @@ pub enum EngineError {
     OperationFailed,
     #[error("upload size {size} exceeds server limit {max_size}")]
     UploadTooLarge { size: u64, max_size: u64 },
+    #[error("upload size {size} exceeds available cloud space {available}")]
+    InsufficientCloudSpace { size: u64, available: u64 },
 }
 
 pub struct SyncEngine {
@@ -53,12 +55,18 @@ pub struct SyncEngine {
     cache_root: PathBuf,
     backoff: Backoff,
     active_transfers: Arc<Mutex<HashMap<String, CancellationToken>>>,
-    upload_limit_cache: Arc<Mutex<UploadLimitCache>>,
+    disk_info_cache: Arc<Mutex<DiskInfoCache>>,
 }
 
 const MAX_RETRY_ATTEMPTS: u32 = 5;
 const UPLOAD_LIMIT_CACHE_TTL: Duration = Duration::from_secs(300);
-type UploadLimitCache = Option<(Option<u64>, Instant)>;
+type DiskInfoCache = Option<(DiskInfo, Instant)>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloudSpaceStatus {
+    pub available: u64,
+    pub low: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathDisplayState {
@@ -123,7 +131,7 @@ impl SyncEngine {
                 true,
             ),
             active_transfers: Arc::new(Mutex::new(HashMap::new())),
-            upload_limit_cache: Arc::new(Mutex::new(None)),
+            disk_info_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -188,40 +196,67 @@ impl SyncEngine {
         }
     }
 
-    async fn max_upload_size(&self) -> Option<u64> {
-        let cached_entry = *self
-            .upload_limit_cache
+    async fn disk_info(&self) -> Option<DiskInfo> {
+        let cached_entry = self
+            .disk_info_cache
             .lock()
-            .expect("upload limit mutex poisoned");
+            .expect("disk info mutex poisoned")
+            .clone();
         if let Some((cached, fetched_at)) = cached_entry
             && fetched_at.elapsed() < UPLOAD_LIMIT_CACHE_TTL
         {
-            return cached;
+            return Some(cached);
         }
 
         match self.client.get_disk_info().await {
             Ok(info) => {
-                let value = info.max_file_size;
                 *self
-                    .upload_limit_cache
+                    .disk_info_cache
                     .lock()
-                    .expect("upload limit mutex poisoned") = Some((value, Instant::now()));
-                value
+                    .expect("disk info mutex poisoned") = Some((info.clone(), Instant::now()));
+                Some(info)
             }
-            Err(_) => (*self
-                .upload_limit_cache
+            Err(_) => self
+                .disk_info_cache
                 .lock()
-                .expect("upload limit mutex poisoned"))
-            .and_then(|(value, _)| value),
+                .expect("disk info mutex poisoned")
+                .as_ref()
+                .map(|(info, _)| info.clone()),
         }
     }
 
-    fn refresh_upload_limit_cache(&self) {
-        *self
-            .upload_limit_cache
-            .lock()
-            .expect("upload limit mutex poisoned") = None;
+    async fn max_upload_size(&self) -> Option<u64> {
+        self.disk_info().await.and_then(|info| info.max_file_size)
     }
+
+    async fn available_cloud_space(&self) -> Option<u64> {
+        self.disk_info()
+            .await
+            .map(|info| info.total_space.saturating_sub(info.used_space))
+    }
+
+    pub async fn cloud_space_status(&self) -> Option<CloudSpaceStatus> {
+        let info = self.disk_info().await?;
+        let available = info.total_space.saturating_sub(info.used_space);
+        Some(CloudSpaceStatus {
+            available,
+            low: is_cloud_space_low(info.total_space, available),
+        })
+    }
+
+    fn refresh_disk_info_cache(&self) {
+        *self
+            .disk_info_cache
+            .lock()
+            .expect("disk info mutex poisoned") = None;
+    }
+}
+
+fn is_cloud_space_low(total_space: u64, available_space: u64) -> bool {
+    if total_space == 0 {
+        return false;
+    }
+    available_space <= 512 * 1024 * 1024 || available_space.saturating_mul(20) <= total_space
 }
 
 include!("engine_impl_core.rs");

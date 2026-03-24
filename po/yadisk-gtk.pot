@@ -110,6 +110,9 @@ msgstr ""
 msgid "Connect your account and manage authorization from one place."
 msgstr ""
 
+msgid "Cloud space is running low"
+msgstr ""
+
 msgid "Continue"
 msgstr ""
 
@@ -281,6 +284,9 @@ msgstr ""
 msgid "Needs setup"
 msgstr ""
 
+msgid "Network unavailable"
+msgstr ""
+
 msgid "Next step"
 msgstr ""
 
@@ -395,6 +401,9 @@ msgstr ""
 msgid "Running"
 msgstr ""
 
+msgid "Offline"
+msgstr ""
+
 msgid "Russian"
 msgstr ""
 
@@ -471,6 +480,9 @@ msgid "Sync Status"
 msgstr ""
 
 msgid "Sync engine reported an error"
+msgstr ""
+
+msgid "Sync root unavailable"
 msgstr ""
 
 msgid "Sync folder"

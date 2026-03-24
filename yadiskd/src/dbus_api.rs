@@ -46,6 +46,8 @@ pub struct ConflictInfo {
     pub renamed_local: String,
 }
 
+type FullStateSnapshot = (Vec<(String, String)>, Vec<(u64, String, String)>);
+
 #[derive(Debug, Error)]
 pub enum DbusServiceError {
     #[error("path does not exist")]
@@ -132,6 +134,55 @@ impl SyncDbusService {
             PathDisplayState::Partial => PathState::Partial,
         }
     }
+
+    async fn full_state_snapshot(&self) -> zbus::fdo::Result<FullStateSnapshot> {
+        if let Some(engine) = &self.backend {
+            let items = engine
+                .list_items_by_prefix("/")
+                .await
+                .map_err(map_engine_error)?;
+            let mut states = HashMap::with_capacity(items.len());
+            for item in items {
+                let Some(state) = engine
+                    .state_for_path(&item.path)
+                    .await
+                    .map_err(map_engine_error)?
+                else {
+                    continue;
+                };
+                let slash = Self::canonical_slash_path(&item.path).map_err(map_to_fdo)?;
+                states.insert(
+                    slash,
+                    Self::from_path_display_state(state).as_str().to_string(),
+                );
+            }
+            let conflicts = engine.list_conflicts().await.map_err(map_engine_error)?;
+            let mut states: Vec<_> = states.into_iter().collect();
+            states.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut conflicts: Vec<_> = conflicts
+                .into_iter()
+                .map(|c| (u64::try_from(c.id).unwrap_or(0), c.path, c.renamed_local))
+                .collect();
+            conflicts.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            return Ok((states, conflicts));
+        }
+
+        let states = self.states.read().await;
+        let mut snapshot_states: Vec<_> = states
+            .iter()
+            .map(|(path, state)| (path.clone(), state.as_str().to_string()))
+            .collect();
+        snapshot_states.sort_by(|a, b| a.0.cmp(&b.0));
+        drop(states);
+
+        let conflicts = self.conflicts.read().await;
+        let mut snapshot_conflicts: Vec<_> = conflicts
+            .iter()
+            .map(|c| (c.id, c.path.clone(), c.renamed_local.clone()))
+            .collect();
+        snapshot_conflicts.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        Ok((snapshot_states, snapshot_conflicts))
+    }
 }
 
 fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
@@ -141,9 +192,9 @@ fn map_engine_error(err: EngineError) -> zbus::fdo::Error {
     }
 }
 
-#[derive(Default)]
 pub struct ControlDbusService {
     backend: Option<Arc<SyncEngine>>,
+    daemon_status: Arc<RwLock<(String, String)>>,
     auth_override: RwLock<Option<(String, String)>>,
     auth_session: RwLock<Option<AuthSession>>,
     integration_override: RwLock<Option<(String, String)>>,
@@ -157,9 +208,21 @@ struct AuthSession {
 }
 
 impl ControlDbusService {
+    pub fn daemon_status_handle() -> Arc<RwLock<(String, String)>> {
+        Arc::new(RwLock::new(("running".to_string(), "idle".to_string())))
+    }
+
     pub fn with_engine(engine: Arc<SyncEngine>) -> Self {
+        Self::with_engine_and_status(engine, Self::daemon_status_handle())
+    }
+
+    pub fn with_engine_and_status(
+        engine: Arc<SyncEngine>,
+        daemon_status: Arc<RwLock<(String, String)>>,
+    ) -> Self {
         Self {
             backend: Some(engine),
+            daemon_status,
             auth_override: RwLock::new(None),
             auth_session: RwLock::new(None),
             integration_override: RwLock::new(None),
@@ -167,6 +230,9 @@ impl ControlDbusService {
     }
 
     async fn daemon_status_tuple(&self) -> (String, String) {
+        if self.backend.is_some() {
+            return self.daemon_status.read().await.clone();
+        }
         let has_work = if let Some(engine) = &self.backend {
             engine.has_active_or_queued_work().await.unwrap_or(false)
         } else {
@@ -280,6 +346,18 @@ impl ControlDbusService {
             format!("missing components: {}", missing.join(", "))
         };
         (state, message)
+    }
+}
+
+impl Default for ControlDbusService {
+    fn default() -> Self {
+        Self {
+            backend: None,
+            daemon_status: Self::daemon_status_handle(),
+            auth_override: RwLock::new(None),
+            auth_session: RwLock::new(None),
+            integration_override: RwLock::new(None),
+        }
     }
 }
 
@@ -418,6 +496,10 @@ impl SyncDbusService {
             .iter()
             .map(|c| (c.id, c.path.clone(), c.renamed_local.clone()))
             .collect())
+    }
+
+    async fn get_full_state(&self) -> zbus::fdo::Result<FullStateSnapshot> {
+        self.full_state_snapshot().await
     }
 
     #[zbus(signal)]
@@ -636,6 +718,53 @@ mod tests {
             .insert("/Docs".to_string(), PathState::Partial);
         let state = service.get_state("/Docs").await.unwrap();
         assert_eq!(state, "partial");
+    }
+
+    #[tokio::test]
+    async fn get_full_state_returns_sorted_states_and_conflicts() {
+        let service = SyncDbusService::default();
+        {
+            let mut states = service.states.write().await;
+            states.insert("/Docs/B.txt".to_string(), PathState::Cached);
+            states.insert("/Docs/A.txt".to_string(), PathState::Partial);
+        }
+        {
+            let mut conflicts = service.conflicts.write().await;
+            conflicts.push(ConflictInfo {
+                id: 2,
+                path: "/Docs/B.txt".to_string(),
+                renamed_local: "/Docs/B (conflict).txt".to_string(),
+            });
+            conflicts.push(ConflictInfo {
+                id: 1,
+                path: "/Docs/A.txt".to_string(),
+                renamed_local: "/Docs/A (conflict).txt".to_string(),
+            });
+        }
+
+        let (states, conflicts) = service.get_full_state().await.unwrap();
+        assert_eq!(
+            states,
+            vec![
+                ("/Docs/A.txt".to_string(), "partial".to_string()),
+                ("/Docs/B.txt".to_string(), "cached".to_string()),
+            ]
+        );
+        assert_eq!(
+            conflicts,
+            vec![
+                (
+                    1,
+                    "/Docs/A.txt".to_string(),
+                    "/Docs/A (conflict).txt".to_string(),
+                ),
+                (
+                    2,
+                    "/Docs/B.txt".to_string(),
+                    "/Docs/B (conflict).txt".to_string(),
+                ),
+            ]
+        );
     }
 
     #[tokio::test]

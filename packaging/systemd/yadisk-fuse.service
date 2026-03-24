@@ -2,11 +2,14 @@
 Description=Yandex Disk FUSE mount lifecycle
 After=yadiskd.service
 Requires=yadiskd.service
+BindsTo=yadiskd.service
+PartOf=yadiskd.service
 
 [Service]
 Type=simple
 Environment="YADISK_SYNC_DIR=%h/Yandex Disk"
 ExecStart=/bin/sh -lc 'exec "$HOME/.local/bin/yadisk-fuse" --mount "${YADISK_SYNC_DIR:-$HOME/Yandex Disk}"'
+ExecStop=/bin/sh -lc 'fusermount3 -u "${YADISK_SYNC_DIR:-$HOME/Yandex Disk}" || true'
 Restart=on-failure
 RestartSec=5
 

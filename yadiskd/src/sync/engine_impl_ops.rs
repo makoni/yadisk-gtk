@@ -123,6 +123,14 @@ impl SyncEngine {
                 max_size,
             });
         }
+        if let Some(available) = self.available_cloud_space().await
+            && local_version.size > available
+        {
+            return Err(EngineError::InsufficientCloudSpace {
+                size: local_version.size,
+                available,
+            });
+        }
 
         let remote = match self.client.get_resource(path).await {
             Ok(resource) => Some(resource),
@@ -310,7 +318,7 @@ impl SyncEngine {
                         | Some(reqwest::StatusCode::INSUFFICIENT_STORAGE)
                 ) =>
             {
-                self.refresh_upload_limit_cache();
+                self.refresh_disk_info_cache();
                 return Err(TransferError::Request(err).into());
             }
             Err(err) => return Err(err.into()),

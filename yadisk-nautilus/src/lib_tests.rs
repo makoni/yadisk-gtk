@@ -70,6 +70,18 @@ fn maps_remote_path_back_to_local_path() {
 }
 
 #[test]
+fn snapshot_cache_expands_disk_and_slash_aliases() {
+    let cache = state_cache_from_snapshot(&[
+        ("disk:/Docs/A.txt".to_string(), SyncUiState::Cached),
+        ("/Docs/B.txt".to_string(), SyncUiState::Partial),
+    ]);
+    assert_eq!(cache.get("disk:/Docs/A.txt"), Some(&SyncUiState::Cached));
+    assert_eq!(cache.get("/Docs/A.txt"), Some(&SyncUiState::Cached));
+    assert_eq!(cache.get("/Docs/B.txt"), Some(&SyncUiState::Partial));
+    assert_eq!(cache.get("disk:/Docs/B.txt"), Some(&SyncUiState::Partial));
+}
+
+#[test]
 fn parses_partial_state_from_dbus() {
     assert_eq!(SyncUiState::from_dbus("partial"), SyncUiState::Partial);
     assert_eq!(SyncUiState::Partial.as_dbus(), "partial");

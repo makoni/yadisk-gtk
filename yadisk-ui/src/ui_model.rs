@@ -102,10 +102,10 @@ fn map_auth_control_status(status: &str) -> UiStatus {
 fn map_daemon_control_status(status: &str) -> UiStatus {
     match status {
         "running" | "busy" => UiStatus::Ready,
+        "offline" | "error" | "failed" => UiStatus::Error,
         "starting" | "stopping" | "pending" | "inactive" | "stopped" | "needs_setup" => {
             UiStatus::NeedsSetup
         }
-        "error" | "failed" => UiStatus::Error,
         _ => UiStatus::Unknown,
     }
 }
@@ -203,6 +203,7 @@ fn localize_state_label(state: &str) -> String {
         "cancelled" => tr("Cancelled"),
         "running" => tr("Running"),
         "busy" => tr("Busy"),
+        "offline" => tr("Offline"),
         "starting" => tr("Starting"),
         "stopping" => tr("Stopping"),
         "inactive" => tr("Inactive"),
@@ -234,6 +235,9 @@ fn localize_daemon_message(message: &str) -> String {
     match message {
         "idle" => tr("Idle"),
         "queued or active operations" => tr("Queued or active operations"),
+        "cloud space low" => tr("Cloud space is running low"),
+        "network unavailable" => tr("Network unavailable"),
+        "sync root unavailable" => tr("Sync root unavailable"),
         "sync engine reported an error" => tr("Sync engine reported an error"),
         other => other.to_string(),
     }
@@ -281,6 +285,7 @@ mod tests {
     fn maps_daemon_control_status_values() {
         assert_eq!(map_daemon_control_status("running"), UiStatus::Ready);
         assert_eq!(map_daemon_control_status("busy"), UiStatus::Ready);
+        assert_eq!(map_daemon_control_status("offline"), UiStatus::Error);
         assert_eq!(map_daemon_control_status("inactive"), UiStatus::NeedsSetup);
         assert_eq!(map_daemon_control_status("failed"), UiStatus::Error);
         assert_eq!(

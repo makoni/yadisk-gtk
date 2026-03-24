@@ -111,6 +111,9 @@ msgstr "Подключение Яндекс Диска"
 msgid "Connect your account and manage authorization from one place."
 msgstr "Подключите аккаунт и управляйте авторизацией из одного места."
 
+msgid "Cloud space is running low"
+msgstr "Свободное место в облаке заканчивается"
+
 msgid "Continue"
 msgstr "Продолжить"
 
@@ -282,6 +285,9 @@ msgstr "Расширение Nautilus"
 msgid "Needs setup"
 msgstr "Требует настройки"
 
+msgid "Network unavailable"
+msgstr "Сеть недоступна"
+
 msgid "Next step"
 msgstr "Следующий шаг"
 
@@ -396,6 +402,9 @@ msgstr "Выполните эти команды в терминале, зате
 msgid "Running"
 msgstr "Работает"
 
+msgid "Offline"
+msgstr "Не в сети"
+
 msgid "Russian"
 msgstr "Русский"
 
@@ -473,6 +482,9 @@ msgstr "Статус синхронизации"
 
 msgid "Sync engine reported an error"
 msgstr "Движок синхронизации сообщил об ошибке"
+
+msgid "Sync root unavailable"
+msgstr "Папка синхронизации недоступна"
 
 msgid "Sync folder"
 msgstr "Папка синхронизации"

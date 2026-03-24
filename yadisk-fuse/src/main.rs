@@ -386,7 +386,12 @@ mod app {
                 return;
             }
             eprintln!("[yadisk-fuse] on-demand download requested: {remote}");
-            let _ = self.downloader.download(&remote);
+            if !self.downloader.download(&remote) {
+                eprintln!(
+                    "[yadisk-fuse] on-demand download could not start because Sync1 is unavailable: {remote}"
+                );
+                return;
+            }
             let (lock, cvar) = &*self.state_notify;
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {

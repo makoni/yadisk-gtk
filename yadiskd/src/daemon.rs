@@ -8,6 +8,8 @@ use anyhow::Context;
 use md5::Context as Md5Context;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use yadisk_core::YadiskClient;
 #[cfg(test)]
 use yadisk_core::{ApiErrorClass, DiskInfo, OAuthClient};
@@ -17,7 +19,7 @@ use zbus::object_server::SignalEmitter;
 
 use crate::dbus_api::{ControlDbusService, SyncDbusService};
 use crate::storage::TokenStorage;
-use crate::sync::engine::SyncEngine;
+use crate::sync::engine::{EngineError, SyncEngine};
 use crate::sync::index::{FileState, IndexStore};
 use crate::sync::local_watcher::{LocalEvent, start_notify_watcher};
 #[cfg(test)]
@@ -31,6 +33,7 @@ const DEFAULT_CLOUD_POLL_SECS: u64 = 15;
 const DEFAULT_WORKER_LOOP_MS: u64 = 500;
 const DEFAULT_EVICTION_SECS: u64 = 60;
 const DEFAULT_CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const SHUTDOWN_TASK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
@@ -142,6 +145,7 @@ impl DaemonRuntime {
             }
         );
 
+        let daemon_status = ControlDbusService::daemon_status_handle();
         let dbus_connection = ConnectionBuilder::session()?
             .name(DBUS_NAME_SYNC)?
             .serve_at(
@@ -150,7 +154,10 @@ impl DaemonRuntime {
             )?
             .serve_at(
                 DBUS_OBJECT_PATH_CONTROL,
-                ControlDbusService::with_engine(Arc::clone(&self.engine)),
+                ControlDbusService::with_engine_and_status(
+                    Arc::clone(&self.engine),
+                    Arc::clone(&daemon_status),
+                ),
             )?
             .build()
             .await
@@ -158,6 +165,7 @@ impl DaemonRuntime {
 
         let (quit_tx, mut quit_rx) = mpsc::unbounded_channel::<()>();
         let (tray_state_tx, mut tray_state_rx) = mpsc::unbounded_channel::<TraySyncState>();
+        let shutdown = CancellationToken::new();
         let tray_controller = match start_status_tray(quit_tx.clone()) {
             Ok(controller) => controller,
             Err(err) => {
@@ -178,6 +186,8 @@ impl DaemonRuntime {
             is_sync_root_available(&self.config.sync_root).await,
         ));
         let cloud_sync_error = Arc::new(AtomicBool::new(false));
+        let cloud_space_low = Arc::new(AtomicBool::new(false));
+        let network_available = Arc::new(AtomicBool::new(true));
         if !sync_root_available.load(Ordering::SeqCst) {
             eprintln!(
                 "[yadiskd] sync root is unavailable: {}",
@@ -205,13 +215,21 @@ impl DaemonRuntime {
         let cloud_poll_interval = self.config.cloud_poll_interval;
         let sync_root_available_cloud = Arc::clone(&sync_root_available);
         let cloud_sync_error_cloud = Arc::clone(&cloud_sync_error);
+        let cloud_space_low_cloud = Arc::clone(&cloud_space_low);
+        let network_available_cloud = Arc::clone(&network_available);
         let auth_ready_cloud = Arc::clone(&self.auth_ready);
+        let shutdown_cloud = shutdown.child_token();
         let cloud_handle = tokio::spawn(async move {
             loop {
+                if shutdown_cloud.is_cancelled() {
+                    break;
+                }
                 if !auth_ready_cloud.load(Ordering::SeqCst)
                     || !sync_root_available_cloud.load(Ordering::SeqCst)
                 {
-                    tokio::time::sleep(cloud_poll_interval).await;
+                    if sleep_or_shutdown(&shutdown_cloud, cloud_poll_interval).await {
+                        break;
+                    }
                     continue;
                 }
                 match engine_for_cloud
@@ -219,7 +237,13 @@ impl DaemonRuntime {
                     .await
                 {
                     Ok(delta) => {
+                        if !network_available_cloud.swap(true, Ordering::SeqCst) {
+                            eprintln!("[yadiskd] network restored");
+                        }
                         cloud_sync_error_cloud.store(false, Ordering::SeqCst);
+                        if let Some(space_status) = engine_for_cloud.cloud_space_status().await {
+                            cloud_space_low_cloud.store(space_status.low, Ordering::SeqCst);
+                        }
                         if delta.indexed > 0 || delta.deleted > 0 || delta.enqueued_downloads > 0 {
                             eprintln!(
                                 "[yadiskd] cloud delta: indexed={}, deleted={}, enqueued_downloads={}",
@@ -228,24 +252,49 @@ impl DaemonRuntime {
                         }
                     }
                     Err(err) => {
-                        cloud_sync_error_cloud.store(true, Ordering::SeqCst);
-                        eprintln!("[yadiskd] cloud sync error: {err}");
+                        if next_network_availability(Err(&err)) {
+                            network_available_cloud.store(true, Ordering::SeqCst);
+                            cloud_sync_error_cloud.store(true, Ordering::SeqCst);
+                            eprintln!("[yadiskd] cloud sync error: {err}");
+                        } else {
+                            let was_online = network_available_cloud.swap(false, Ordering::SeqCst);
+                            cloud_sync_error_cloud.store(false, Ordering::SeqCst);
+                            cloud_space_low_cloud.store(false, Ordering::SeqCst);
+                            if was_online {
+                                eprintln!("[yadiskd] network unavailable: {err}");
+                            }
+                        }
                     }
                 }
-                tokio::time::sleep(cloud_poll_interval).await;
+                if sleep_or_shutdown(&shutdown_cloud, cloud_poll_interval).await {
+                    break;
+                }
             }
         });
 
         let engine_for_worker = Arc::clone(&self.engine);
         let worker_interval = self.config.worker_interval;
         let sync_root_available_worker = Arc::clone(&sync_root_available);
+        let network_available_worker = Arc::clone(&network_available);
         let auth_ready_worker = Arc::clone(&self.auth_ready);
+        let shutdown_worker = shutdown.child_token();
         let worker_handle = tokio::spawn(async move {
             loop {
+                if shutdown_worker.is_cancelled() {
+                    break;
+                }
                 if !auth_ready_worker.load(Ordering::SeqCst)
                     || !sync_root_available_worker.load(Ordering::SeqCst)
                 {
-                    tokio::time::sleep(worker_interval).await;
+                    if sleep_or_shutdown(&shutdown_worker, worker_interval).await {
+                        break;
+                    }
+                    continue;
+                }
+                if !network_available_worker.load(Ordering::SeqCst) {
+                    if sleep_or_shutdown(&shutdown_worker, Duration::from_secs(2)).await {
+                        break;
+                    }
                     continue;
                 }
                 match engine_for_worker.run_once().await {
@@ -257,7 +306,9 @@ impl DaemonRuntime {
                         eprintln!("[yadiskd] worker error: {err}");
                     }
                 }
-                tokio::time::sleep(worker_interval).await;
+                if sleep_or_shutdown(&shutdown_worker, worker_interval).await {
+                    break;
+                }
             }
         });
 
@@ -268,19 +319,27 @@ impl DaemonRuntime {
         let local_events_enabled_materialize = Arc::clone(&local_events_enabled);
         let sync_root_available_materialize = Arc::clone(&sync_root_available);
         let auth_ready_materialize = Arc::clone(&self.auth_ready);
+        let shutdown_materialize = shutdown.child_token();
         let materialize_handle = tokio::spawn(async move {
             let mut initial_logged = false;
             let mut materialize_enabled = true;
             let mut previous_materialized_paths: HashSet<PathBuf> = HashSet::new();
             loop {
+                if shutdown_materialize.is_cancelled() {
+                    break;
+                }
                 if !materialize_enabled {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    if sleep_or_shutdown(&shutdown_materialize, Duration::from_secs(5)).await {
+                        break;
+                    }
                     continue;
                 }
                 if !auth_ready_materialize.load(Ordering::SeqCst)
                     || !sync_root_available_materialize.load(Ordering::SeqCst)
                 {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    if sleep_or_shutdown(&shutdown_materialize, Duration::from_secs(1)).await {
+                        break;
+                    }
                     continue;
                 }
                 match materialize_sync_tree(
@@ -336,7 +395,9 @@ impl DaemonRuntime {
                         }
                     }
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                if sleep_or_shutdown(&shutdown_materialize, Duration::from_secs(1)).await {
+                    break;
+                }
             }
         });
 
@@ -344,9 +405,13 @@ impl DaemonRuntime {
         let storage_sync_root = self.config.sync_root.clone();
         let sync_root_available_storage = Arc::clone(&sync_root_available);
         let local_events_enabled_storage = Arc::clone(&local_events_enabled);
+        let shutdown_storage = shutdown.child_token();
         let storage_handle = tokio::spawn(async move {
             let mut known = sync_root_available_storage.load(Ordering::SeqCst);
             loop {
+                if shutdown_storage.is_cancelled() {
+                    break;
+                }
                 let available = is_sync_root_available(&storage_sync_root).await;
                 if available != known {
                     sync_root_available_storage.store(available, Ordering::SeqCst);
@@ -366,7 +431,9 @@ impl DaemonRuntime {
                     }
                     known = available;
                 }
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                if sleep_or_shutdown(&shutdown_storage, Duration::from_secs(2)).await {
+                    break;
+                }
             }
         });
 
@@ -375,8 +442,12 @@ impl DaemonRuntime {
         let cache_root = self.config.cache_root.clone();
         let cache_max_bytes = self.config.cache_max_bytes;
         let eviction_interval = self.config.eviction_interval;
+        let shutdown_eviction = shutdown.child_token();
         let eviction_handle = tokio::spawn(async move {
             loop {
+                if shutdown_eviction.is_cancelled() {
+                    break;
+                }
                 let _ = run_cache_eviction_once(
                     &engine_for_eviction,
                     &cache_root,
@@ -384,7 +455,9 @@ impl DaemonRuntime {
                     cache_max_bytes,
                 )
                 .await;
-                tokio::time::sleep(eviction_interval).await;
+                if sleep_or_shutdown(&shutdown_eviction, eviction_interval).await {
+                    break;
+                }
             }
         });
 
@@ -399,6 +472,10 @@ impl DaemonRuntime {
         let tray_state_tx_signal = tray_state_tx.clone();
         let sync_root_available_signal = Arc::clone(&sync_root_available);
         let cloud_sync_error_signal = Arc::clone(&cloud_sync_error);
+        let cloud_space_low_signal = Arc::clone(&cloud_space_low);
+        let network_available_signal = Arc::clone(&network_available);
+        let daemon_status_signal = Arc::clone(&daemon_status);
+        let shutdown_signal = shutdown.child_token();
         let signal_handle = tokio::spawn(async move {
             let mut known_states: HashMap<String, &'static str> = HashMap::new();
             let mut last_signal_snapshot_complete = true;
@@ -408,6 +485,9 @@ impl DaemonRuntime {
             let mut last_conflict_id = 0i64;
 
             loop {
+                if shutdown_signal.is_cancelled() {
+                    break;
+                }
                 let tray_language =
                     resolve_effective_language(load_ui_preferences().language_preference);
                 let language_changed =
@@ -453,22 +533,39 @@ impl DaemonRuntime {
                         .has_active_or_queued_work()
                         .await
                         .unwrap_or(false);
+                    let sync_root_ready = sync_root_available_signal.load(Ordering::SeqCst);
+                    let network_ready = network_available_signal.load(Ordering::SeqCst);
+                    let cloud_error = cloud_sync_error_signal.load(Ordering::SeqCst);
+                    let cloud_space_warn = cloud_space_low_signal.load(Ordering::SeqCst);
                     let tray_state = effective_tray_state(
                         &current_states,
                         has_active_work,
-                        sync_root_available_signal.load(Ordering::SeqCst),
-                        cloud_sync_error_signal.load(Ordering::SeqCst),
+                        sync_root_ready,
+                        network_ready,
+                        cloud_error,
                     );
                     if known_tray_state != Some(tray_state) || language_changed {
                         let _ = tray_state_tx_signal.send(tray_state);
                         known_tray_state = Some(tray_state);
                     }
-                    let daemon_state = match tray_state {
-                        TraySyncState::Normal => ("running", "idle"),
-                        TraySyncState::Syncing => ("busy", "queued or active operations"),
-                        TraySyncState::Error => ("error", "sync engine reported an error"),
+                    let daemon_state = if !sync_root_ready {
+                        ("error", "sync root unavailable")
+                    } else if !network_ready {
+                        ("offline", "network unavailable")
+                    } else if cloud_space_warn {
+                        ("running", "cloud space low")
+                    } else {
+                        match tray_state {
+                            TraySyncState::Normal => ("running", "idle"),
+                            TraySyncState::Syncing => ("busy", "queued or active operations"),
+                            TraySyncState::Error => ("error", "sync engine reported an error"),
+                        }
                     };
                     if known_daemon_state != Some(daemon_state) {
+                        {
+                            let mut status = daemon_status_signal.write().await;
+                            *status = (daemon_state.0.to_string(), daemon_state.1.to_string());
+                        }
                         if let Err(err) = ControlDbusService::daemon_status_changed(
                             &control_signal_emitter,
                             daemon_state.0,
@@ -513,7 +610,9 @@ impl DaemonRuntime {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                if sleep_or_shutdown(&shutdown_signal, Duration::from_secs(1)).await {
+                    break;
+                }
             }
         });
 
@@ -524,9 +623,17 @@ impl DaemonRuntime {
             let local_remote_root = self.config.remote_root.clone();
             let local_events_enabled_local = Arc::clone(&local_events_enabled);
             let sync_root_available_local = Arc::clone(&sync_root_available);
+            let shutdown_local = shutdown.child_token();
             Some(tokio::spawn(async move {
                 let mut seen_uploads: HashMap<String, (u64, u128)> = HashMap::new();
-                while let Some(event) = rx.recv().await {
+                loop {
+                    let event = tokio::select! {
+                        _ = shutdown_local.cancelled() => break,
+                        event = rx.recv() => match event {
+                            Some(event) => event,
+                            None => break,
+                        },
+                    };
                     if !local_events_enabled_local.load(Ordering::SeqCst) {
                         continue;
                     }
@@ -601,20 +708,51 @@ impl DaemonRuntime {
             }
         }
 
-        cloud_handle.abort();
-        worker_handle.abort();
-        materialize_handle.abort();
-        storage_handle.abort();
-        eviction_handle.abort();
-        signal_handle.abort();
+        shutdown.cancel();
+        self.engine.cancel_all_transfers();
+        drop(quit_tx);
+        drop(tray_state_tx);
+
+        shutdown_task("cloud", cloud_handle).await;
+        shutdown_task("worker", worker_handle).await;
+        shutdown_task("materialize", materialize_handle).await;
+        shutdown_task("storage", storage_handle).await;
+        shutdown_task("eviction", eviction_handle).await;
+        shutdown_task("signals", signal_handle).await;
         if let Some(handle) = local_handle {
-            handle.abort();
+            shutdown_task("local-events", handle).await;
         }
         if let Some(handle) = tray_handle {
-            handle.abort();
+            shutdown_task("tray", handle).await;
         }
 
         Ok(())
+    }
+}
+
+pub(crate) async fn sleep_or_shutdown(shutdown: &CancellationToken, duration: Duration) -> bool {
+    tokio::select! {
+        _ = shutdown.cancelled() => true,
+        _ = tokio::time::sleep(duration) => false,
+    }
+}
+
+async fn shutdown_task(name: &str, mut handle: JoinHandle<()>) {
+    match tokio::time::timeout(SHUTDOWN_TASK_TIMEOUT, &mut handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) if err.is_cancelled() => {}
+        Ok(Err(err)) => {
+            eprintln!("[yadiskd] task {name} exited with join error: {err}");
+        }
+        Err(_) => {
+            eprintln!("[yadiskd] task {name} did not stop in time; aborting");
+            handle.abort();
+            if let Err(err) = handle.await
+                && !err.is_cancelled()
+            {
+                eprintln!("[yadiskd] task {name} aborted with join error: {err}");
+            }
+        }
     }
 }
 

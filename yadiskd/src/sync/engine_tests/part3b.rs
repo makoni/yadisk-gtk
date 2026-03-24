@@ -168,6 +168,60 @@
     }
 
     #[tokio::test]
+    async fn run_once_upload_rejects_when_cloud_space_is_insufficient() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/disk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_space": 10,
+                "used_space": 8,
+                "is_paid": false,
+                "max_file_size": 100
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().unwrap();
+        let engine = make_engine(&server, dir.path()).await;
+        engine
+            .index
+            .upsert_item(&ItemInput {
+                path: "/Docs/Quota.txt".into(),
+                parent_path: Some("/Docs".into()),
+                name: "Quota.txt".into(),
+                item_type: ItemType::File,
+                size: Some(5),
+                modified: None,
+                hash: None,
+                resource_id: None,
+                last_synced_hash: None,
+                last_synced_modified: None,
+            })
+            .await
+            .unwrap();
+        let source = cache_path_for(dir.path(), "/Docs/Quota.txt").unwrap();
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"12345").await.unwrap();
+        engine.enqueue_upload("/Docs/Quota.txt").await.unwrap();
+
+        let err = engine
+            .run_once()
+            .await
+            .expect_err("expected cloud space validation error");
+        assert!(matches!(err, EngineError::InsufficientCloudSpace { .. }));
+        let item = engine
+            .index
+            .get_item_by_path("/Docs/Quota.txt")
+            .await
+            .unwrap()
+            .unwrap();
+        let state = engine.index.get_state(item.id).await.unwrap().unwrap();
+        assert_eq!(state.state, FileState::Error);
+    }
+
+    #[tokio::test]
     async fn run_once_uses_retry_after_header_for_requeue() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

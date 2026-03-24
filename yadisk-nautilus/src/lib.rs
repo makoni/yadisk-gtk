@@ -102,6 +102,21 @@ pub struct FileUiInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictInfo {
+    pub id: u64,
+    pub path: String,
+    pub renamed_local: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullStateSnapshot {
+    pub states: Vec<(String, SyncUiState)>,
+    pub conflicts: Vec<ConflictInfo>,
+}
+
+type RawFullStateSnapshot = (Vec<(String, String)>, Vec<(u64, String, String)>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncSignalEvent {
     StateChanged {
         path: String,
@@ -152,6 +167,27 @@ pub fn menu_for_state(state: SyncUiState) -> Vec<MenuItemSpec> {
         .collect()
 }
 
+pub fn remote_path_aliases(remote_path: &str) -> [String; 2] {
+    if let Some(rest) = remote_path.strip_prefix("disk:/") {
+        let suffix = rest.trim_start_matches('/');
+        return [remote_path.to_string(), format!("/{}", suffix)];
+    }
+    if let Some(rest) = remote_path.strip_prefix('/') {
+        return [remote_path.to_string(), format!("disk:/{}", rest)];
+    }
+    [remote_path.to_string(), remote_path.to_string()]
+}
+
+pub fn state_cache_from_snapshot(states: &[(String, SyncUiState)]) -> HashMap<String, SyncUiState> {
+    let mut cache = HashMap::with_capacity(states.len() * 2);
+    for (path, state) in states {
+        for alias in remote_path_aliases(path) {
+            cache.insert(alias, *state);
+        }
+    }
+    cache
+}
+
 #[derive(Debug, Error)]
 pub enum ExtensionError {
     #[error("dbus error: {0}")]
@@ -190,6 +226,25 @@ impl SyncDbusClient {
         let proxy = self.proxy()?;
         let state: String = proxy.call("GetState", &(remote_path))?;
         Ok(SyncUiState::from_dbus(&state))
+    }
+
+    pub fn get_full_state(&self) -> Result<FullStateSnapshot, ExtensionError> {
+        let proxy = self.proxy()?;
+        let (states, conflicts): RawFullStateSnapshot = proxy.call("GetFullState", &())?;
+        Ok(FullStateSnapshot {
+            states: states
+                .into_iter()
+                .map(|(path, state)| (path, SyncUiState::from_dbus(&state)))
+                .collect(),
+            conflicts: conflicts
+                .into_iter()
+                .map(|(id, path, renamed_local)| ConflictInfo {
+                    id,
+                    path,
+                    renamed_local,
+                })
+                .collect(),
+        })
     }
 
     pub fn save_offline(&self, remote_path: &str) -> Result<(), ExtensionError> {

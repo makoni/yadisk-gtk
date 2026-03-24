@@ -551,7 +551,7 @@ impl SyncEngine {
                 return Ok(true);
             }
             if let Ok(Some(item)) = self.index.get_item_by_path(&op.path).await {
-                if matches!(
+                let should_refresh_disk_info = matches!(
                     &err,
                     EngineError::Api(yadisk_core::YadiskError::Api { status, .. })
                         if matches!(
@@ -559,8 +559,9 @@ impl SyncEngine {
                             reqwest::StatusCode::PAYLOAD_TOO_LARGE
                                 | reqwest::StatusCode::INSUFFICIENT_STORAGE
                         )
-                ) {
-                    self.refresh_upload_limit_cache();
+                ) || matches!(&err, EngineError::InsufficientCloudSpace { .. });
+                if should_refresh_disk_info {
+                    self.refresh_disk_info_cache();
                 }
                 let pinned = self
                     .index

@@ -17,12 +17,39 @@ fn effective_tray_state(
     states: &HashMap<String, &'static str>,
     has_active_work: bool,
     sync_root_available: bool,
+    network_available: bool,
     cloud_sync_error: bool,
 ) -> TraySyncState {
-    if !sync_root_available || cloud_sync_error {
+    if !sync_root_available || !network_available || cloud_sync_error {
         return TraySyncState::Error;
     }
     tray_state_from_states(states, has_active_work)
+}
+
+fn next_network_availability(result: Result<(), &EngineError>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(err) => !is_network_unavailable_error(err),
+    }
+}
+
+fn is_network_unavailable_error(err: &EngineError) -> bool {
+    match err {
+        EngineError::Api(yadisk_core::YadiskError::Request(req)) => {
+            req.is_connect() || req.is_timeout()
+        }
+        EngineError::Api(yadisk_core::YadiskError::Api { status, .. }) => matches!(
+            *status,
+            reqwest::StatusCode::REQUEST_TIMEOUT
+                | reqwest::StatusCode::BAD_GATEWAY
+                | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                | reqwest::StatusCode::GATEWAY_TIMEOUT
+        ),
+        EngineError::Transfer(crate::sync::transfer::TransferError::Request(req)) => {
+            req.is_connect() || req.is_timeout()
+        }
+        _ => false,
+    }
 }
 
 fn should_force_signal_snapshot(
