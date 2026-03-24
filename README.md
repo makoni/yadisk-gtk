@@ -2,6 +2,10 @@
 
 Native GNOME client for Yandex Disk (Rust, REST API, Flatpak)
 
+## License
+
+This project is open source under the `MIT` license. See [`LICENSE`](LICENSE).
+
 ## Overview
 
 This project implements a two-way sync client for Yandex Disk with deep GNOME integration:
