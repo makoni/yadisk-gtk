@@ -143,8 +143,8 @@ bash packaging/host/install-nautilus-extension.sh
 nautilus -q
 ```
 
-`install-nautilus-extension.sh` автоматически определяет `extensiondir` через `pkg-config`.
-Если каталог системный и не writable, скрипт сначала пробует `pkexec` (GUI-диалог пароля), затем fallback на `sudo`.
+`install-nautilus-extension.sh` по умолчанию ставит расширение в активный `extensiondir`, который Nautilus сообщает через `pkg-config`.
+На этой системе это системный каталог `/usr/lib/x86_64-linux-gnu/nautilus/extensions-4`, поэтому для установки могут понадобиться `pkexec` или `sudo`. Нестандартный путь можно задать через `YADISK_NAUTILUS_EXT_DIR`.
 
 What it provides in Files (Nautilus):
 - state emblems (`cloud_only` / `cached` / `syncing` / `error`)

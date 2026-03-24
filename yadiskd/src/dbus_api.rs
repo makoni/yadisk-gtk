@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -310,10 +311,9 @@ impl ControlDbusService {
     }
 
     fn detect_integration_status() -> (String, String) {
-        let nautilus_installed = nautilus_candidate_paths()
-            .into_iter()
-            .map(|base| base.join("libyadisk_nautilus.so"))
-            .any(|path| path.is_file());
+        let nautilus_installed = active_nautilus_extension_dir()
+            .join("libyadisk_nautilus.so")
+            .is_file();
         let fuse_installed = std::env::var_os("HOME")
             .map(PathBuf::from)
             .map(|home| home.join(".local/bin/yadisk-fuse"))
@@ -374,6 +374,28 @@ fn nautilus_candidate_paths() -> Vec<PathBuf> {
         "/usr/lib/x86_64-linux-gnu/nautilus/extensions-4",
     ));
     paths
+}
+
+fn active_nautilus_extension_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
+        return PathBuf::from(path);
+    }
+    let output = Command::new("pkg-config")
+        .arg("--variable=extensiondir")
+        .arg("libnautilus-extension-4")
+        .output();
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        return home.join(".local/lib/nautilus/extensions-4");
+    }
+    PathBuf::from(".local/lib/nautilus/extensions-4")
 }
 
 #[interface(name = "me.spaceinbox.yadisk.Sync1")]

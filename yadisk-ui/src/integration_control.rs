@@ -49,10 +49,9 @@ impl IntegrationStatus {
 }
 
 pub fn detect_integration_status() -> IntegrationStatus {
-    let nautilus_extension_installed = nautilus_candidate_paths()
-        .into_iter()
-        .map(|base| base.join(NAUTILUS_LIB_NAME))
-        .any(|path| path.is_file());
+    let nautilus_extension_installed = active_nautilus_extension_dir()
+        .join(NAUTILUS_LIB_NAME)
+        .is_file();
     let fuse_helper_installed = std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(".local/bin").join(FUSE_BIN_NAME))
@@ -106,7 +105,7 @@ pub fn run_auto_install() -> Result<()> {
 }
 
 pub fn ensure_auto_install_permissions() -> Result<()> {
-    let ext_dir = install_nautilus_extension_dir();
+    let ext_dir = active_nautilus_extension_dir();
     if is_dir_writable(&ext_dir) {
         return Ok(());
     }
@@ -205,16 +204,11 @@ fn component_label(name: &str) -> String {
 }
 
 fn install_nautilus_extension_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
-        return PathBuf::from(path);
-    }
-    if let Some(path) = pkg_config_extension_dir() {
-        return path;
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".local/lib/nautilus/extensions-4"))
-        .unwrap_or_else(|| PathBuf::from(".local/lib/nautilus/extensions-4"))
+    resolve_active_nautilus_extension_dir(
+        std::env::var_os("YADISK_NAUTILUS_EXT_DIR").map(PathBuf::from),
+        pkg_config_extension_dir(),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
 }
 
 fn pkg_config_extension_dir() -> Option<PathBuf> {
@@ -255,19 +249,49 @@ fn can_create_probe_file(dir: &Path) -> bool {
     }
 }
 
+fn active_nautilus_extension_dir() -> PathBuf {
+    install_nautilus_extension_dir()
+}
+
 fn nautilus_candidate_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(path) = std::env::var_os("YADISK_NAUTILUS_EXT_DIR") {
         paths.push(PathBuf::from(path));
     }
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        paths.push(home.join(".local/lib/nautilus/extensions-4"));
-    }
+    paths.push(home_nautilus_extension_dir());
     paths.push(PathBuf::from("/usr/lib/nautilus/extensions-4"));
     paths.push(PathBuf::from(
         "/usr/lib/x86_64-linux-gnu/nautilus/extensions-4",
     ));
+    if let Some(path) = pkg_config_extension_dir() {
+        paths.push(path);
+    }
+    paths.sort();
+    paths.dedup();
     paths
+}
+
+fn home_nautilus_extension_dir() -> PathBuf {
+    home_nautilus_extension_dir_from(std::env::var_os("HOME").map(PathBuf::from))
+}
+
+fn resolve_active_nautilus_extension_dir(
+    override_dir: Option<PathBuf>,
+    pkg_config_dir: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(path) = override_dir {
+        return path;
+    }
+    if let Some(path) = pkg_config_dir {
+        return path;
+    }
+    home_nautilus_extension_dir_from(home)
+}
+
+fn home_nautilus_extension_dir_from(home: Option<PathBuf>) -> PathBuf {
+    home.map(|home_dir| home_dir.join(".local/lib/nautilus/extensions-4"))
+        .unwrap_or_else(|| PathBuf::from(".local/lib/nautilus/extensions-4"))
 }
 
 fn repo_root() -> PathBuf {
@@ -301,5 +325,40 @@ mod tests {
             emblems_installed: true,
         };
         assert_eq!(status.summary_state(), "ok");
+    }
+
+    #[test]
+    fn install_path_defaults_to_pkg_config_dir_when_available() {
+        let pkg_dir = PathBuf::from("/usr/lib/x86_64-linux-gnu/nautilus/extensions-4");
+        let home = std::env::temp_dir().join(format!("yadisk-ui-home-{}", std::process::id()));
+        assert_eq!(
+            resolve_active_nautilus_extension_dir(None, Some(pkg_dir.clone()), Some(home)),
+            pkg_dir
+        );
+    }
+
+    #[test]
+    fn install_path_falls_back_to_user_local_dir_without_pkg_config() {
+        let home = std::env::temp_dir().join(format!("yadisk-ui-home-{}", std::process::id()));
+        assert_eq!(
+            resolve_active_nautilus_extension_dir(None, None, Some(home.clone())),
+            home.join(".local/lib/nautilus/extensions-4")
+        );
+    }
+
+    #[test]
+    fn override_install_path_still_wins() {
+        let override_dir =
+            std::env::temp_dir().join(format!("yadisk-ui-ext-{}", std::process::id()));
+        assert_eq!(
+            resolve_active_nautilus_extension_dir(
+                Some(override_dir.clone()),
+                Some(PathBuf::from(
+                    "/usr/lib/x86_64-linux-gnu/nautilus/extensions-4"
+                )),
+                None
+            ),
+            override_dir
+        );
     }
 }

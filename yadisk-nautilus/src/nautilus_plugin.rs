@@ -9,7 +9,10 @@ static NEXT_ACTION_ID: AtomicUsize = AtomicUsize::new(1);
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::thread;
 
-use glib_sys::{GList, GType, g_free, g_list_append, gpointer};
+use glib_sys::{
+    GFALSE, GList, GType, g_free, g_list_append, g_main_context_default, g_main_context_invoke,
+    gpointer,
+};
 use gobject_sys::{
     GClosure, GInterfaceInfo, GObject, GObjectClass, GTypeInfo, GTypeInterface, GTypeModule,
     g_object_get_type, g_object_unref, g_signal_connect_data, g_type_module_add_interface,
@@ -436,6 +439,27 @@ fn file_info_to_local_path(file_info: *mut NautilusFileInfo) -> Option<PathBuf> 
         }
         Some(path)
     }
+}
+
+fn queue_invalidate_for_local_path(local_path: PathBuf) {
+    let path = Box::new(local_path);
+    unsafe {
+        g_main_context_invoke(
+            g_main_context_default(),
+            Some(invalidate_file_info_cb),
+            Box::into_raw(path) as gpointer,
+        );
+    }
+}
+
+unsafe extern "C" fn invalidate_file_info_cb(data: gpointer) -> glib_sys::gboolean {
+    if data.is_null() {
+        return GFALSE;
+    }
+    let path = Box::from_raw(data as *mut PathBuf);
+    invalidate_file_info_for_local_path(&path);
+    invalidate_parent_info_for_local_path(&path);
+    GFALSE
 }
 
 include!("nautilus_plugin_runtime.rs");

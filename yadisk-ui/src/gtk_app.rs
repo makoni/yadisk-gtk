@@ -1273,10 +1273,13 @@ fn restart_nautilus() -> Result<()> {
         anyhow::bail!("nautilus -q exited with status {quit_status}");
     }
     wait_for_nautilus_shutdown(&before)?;
-    Command::new("nautilus")
+    let relaunch_status = Command::new("nautilus")
         .arg("--new-window")
-        .spawn()
+        .status()
         .context("failed to relaunch Nautilus after quit")?;
+    if !relaunch_status.success() {
+        anyhow::bail!("nautilus --new-window exited with status {relaunch_status}");
+    }
     let pid = wait_for_nautilus_restart(&before)?;
     if integration_status.nautilus_extension_installed {
         verify_nautilus_extension_loaded(pid)?;
@@ -1285,8 +1288,12 @@ fn restart_nautilus() -> Result<()> {
 }
 
 fn nautilus_pids() -> BTreeSet<u32> {
+    nautilus_pids_in(std::path::Path::new("/proc"))
+}
+
+fn nautilus_pids_in(proc_root: &std::path::Path) -> BTreeSet<u32> {
     let mut pids = BTreeSet::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
         return pids;
     };
     for entry in entries.flatten() {
@@ -1296,14 +1303,27 @@ fn nautilus_pids() -> BTreeSet<u32> {
         let Ok(pid) = name.parse::<u32>() else {
             continue;
         };
-        let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) else {
+        let proc_dir = entry.path();
+        let Ok(comm) = std::fs::read_to_string(proc_dir.join("comm")) else {
             continue;
         };
-        if comm.trim() == "nautilus" {
+        if comm.trim() == "nautilus" && process_state(&proc_dir) != Some('Z') {
             pids.insert(pid);
         }
     }
     pids
+}
+
+fn process_state(proc_dir: &std::path::Path) -> Option<char> {
+    let status = std::fs::read_to_string(proc_dir.join("status")).ok()?;
+    parse_process_status_state(&status)
+}
+
+fn parse_process_status_state(status: &str) -> Option<char> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("State:"))
+        .and_then(|value| value.trim_start().chars().next())
 }
 
 fn wait_for_nautilus_shutdown(previous: &BTreeSet<u32>) -> Result<()> {
@@ -1342,6 +1362,68 @@ fn verify_nautilus_extension_loaded(pid: u32) -> Result<()> {
         std::thread::sleep(Duration::from_millis(150));
     }
     anyhow::bail!("Nautilus restarted, but libyadisk_nautilus.so was not loaded");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_process_status_state() {
+        assert_eq!(
+            parse_process_status_state("Name:\tnautilus\nState:\tZ (zombie)\nPid:\t42\n"),
+            Some('Z')
+        );
+        assert_eq!(
+            parse_process_status_state("Name:\tnautilus\nState:\tS (sleeping)\nPid:\t42\n"),
+            Some('S')
+        );
+        assert_eq!(
+            parse_process_status_state("Name:\tnautilus\nPid:\t42\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn nautilus_pids_ignore_zombies() {
+        let temp = unique_test_dir();
+        write_fake_proc_entry(
+            &temp,
+            100,
+            "nautilus\n",
+            "Name:\tnautilus\nState:\tZ (zombie)\n",
+        );
+        write_fake_proc_entry(
+            &temp,
+            101,
+            "nautilus\n",
+            "Name:\tnautilus\nState:\tS (sleeping)\n",
+        );
+        write_fake_proc_entry(&temp, 102, "bash\n", "Name:\tbash\nState:\tS (sleeping)\n");
+
+        assert_eq!(nautilus_pids_in(&temp), BTreeSet::from([101]));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    fn write_fake_proc_entry(root: &std::path::Path, pid: u32, comm: &str, status: &str) {
+        let dir = root.join(pid.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("comm"), comm).unwrap();
+        std::fs::write(dir.join("status"), status).unwrap();
+    }
+
+    fn unique_test_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "yadisk-ui-nautilus-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }
 
 fn auth_env_missing_error(err: &str) -> bool {

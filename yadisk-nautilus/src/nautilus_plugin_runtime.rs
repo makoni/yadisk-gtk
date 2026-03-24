@@ -149,8 +149,7 @@
 
                 if let Ok(snapshot) = client.get_full_state() {
                     for local_path in apply_full_state_snapshot(&snapshot.states, sync_root()) {
-                        invalidate_file_info_for_local_path(&local_path);
-                        invalidate_parent_info_for_local_path(&local_path);
+                        queue_invalidate_for_local_path(local_path);
                     }
                 }
 
@@ -169,8 +168,7 @@
                                 path,
                                 state.as_dbus()
                             );
-                            invalidate_file_info_for_local_path(&local_path);
-                            invalidate_parent_info_for_local_path(&local_path);
+                            queue_invalidate_for_local_path(local_path);
                         }
                         SyncSignalEvent::ConflictAdded { .. } => {}
                     }
