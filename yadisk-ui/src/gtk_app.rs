@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use gtk4::{gio, glib, prelude::*};
 use libadwaita::prelude::*;
+use libadwaita::{ColorScheme, StyleManager};
 use yadisk_integrations::i18n::{apply_language_preference, product_name, tr};
 use yadisk_integrations::ids::APP_ID_GTK;
 use yadisk_integrations::preferences::{LanguagePreference, load_ui_preferences};
@@ -122,6 +123,7 @@ struct Widgets {
 pub fn run(start_tab: Option<String>) -> Result<()> {
     libadwaita::init()?;
     install_css();
+    apply_color_scheme_override_from_env();
 
     let app = libadwaita::Application::builder()
         .application_id(APP_ID_GTK)
@@ -131,6 +133,20 @@ pub fn run(start_tab: Option<String>) -> Result<()> {
 
     app.run_with_args::<&str>(&[]);
     Ok(())
+}
+
+fn apply_color_scheme_override_from_env() {
+    let Ok(value) = std::env::var("YADISK_UI_FORCE_COLOR_SCHEME") else {
+        return;
+    };
+    let scheme = match value.trim().to_ascii_lowercase().as_str() {
+        "light" | "force-light" => ColorScheme::ForceLight,
+        "dark" | "force-dark" => ColorScheme::ForceDark,
+        "prefer-light" => ColorScheme::PreferLight,
+        "prefer-dark" => ColorScheme::PreferDark,
+        _ => return,
+    };
+    StyleManager::default().set_color_scheme(scheme);
 }
 
 fn present_or_build_window(app: &libadwaita::Application, start_tab: Option<String>) {
@@ -180,8 +196,10 @@ fn build_window(app: &libadwaita::Application, start_tab: Option<String>) {
     let widgets_for_refresh = Rc::clone(&widgets);
     refresh_button.connect_clicked(move |_| refresh_ui_async(&widgets_for_refresh));
 
+    let title_label = gtk4::Label::new(Some(product_name()));
+    title_label.add_css_class("app-title");
     let header = libadwaita::HeaderBar::builder()
-        .title_widget(&gtk4::Label::new(Some(product_name())))
+        .title_widget(&title_label)
         .build();
     header.add_css_class("app-header");
     header.pack_end(&refresh_button);
@@ -239,6 +257,7 @@ fn build_pages(
         "Connect your account and manage authorization from one place.",
     ));
     let auth_card = section_card();
+    auth_card.add_css_class("brand-card");
     let auth_header = section_header("Authorization");
     let auth_badge = status_badge();
     auth_header.append(&auth_badge);
@@ -498,6 +517,7 @@ fn section_header(title: &str) -> gtk4::Box {
 
 fn page_heading(icon_name: &str, title: &str) -> gtk4::Box {
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    row.add_css_class("page-hero");
     let icon = gtk4::Image::from_icon_name(icon_name);
     icon.set_pixel_size(20);
     icon.add_css_class("accent");
@@ -529,6 +549,7 @@ fn section_card() -> gtk4::Box {
 fn note_card(title: &str, text: &str) -> gtk4::Box {
     let card = section_card();
     card.add_css_class("section-muted");
+    card.add_css_class("note-card");
     card.append(&section_title(title));
     let description = body_label();
     description.add_css_class("note-text");
@@ -1725,29 +1746,39 @@ fn guided_step_title(index: usize) -> String {
 fn install_css() {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(
-        ".app-shell { background-image: linear-gradient(180deg, alpha(#fc3f1d, 0.06), transparent 180px), linear-gradient(135deg, alpha(#ffcc00, 0.04), transparent 38%); }\n\
-         .app-header { background-image: linear-gradient(90deg, alpha(#fc3f1d, 0.12), alpha(#ffcc00, 0.05)); border-bottom: 1px solid alpha(#fc3f1d, 0.16); }\n\
-         .navigation-sidebar { padding: 10px; border-radius: 18px; background: linear-gradient(180deg, alpha(#fc3f1d, 0.05), alpha(@window_bg_color, 0.40) 120px); border: 1px solid alpha(#fc3f1d, 0.14); }\n\
-         .navigation-sidebar row { border-radius: 12px; margin: 2px 0; padding: 5px 8px; }\n\
-         .navigation-sidebar row:selected { background: linear-gradient(90deg, alpha(#fc3f1d, 0.20), alpha(#ffcc00, 0.08)); box-shadow: inset 0 0 0 1px alpha(#fc3f1d, 0.32); }\n\
+        ".app-shell { background: alpha(@window_fg_color, 0.015); }\n\
+         .app-header { background: alpha(#fc3f1d, 0.10); border-bottom: 1px solid alpha(#fc3f1d, 0.24); }\n\
+         .app-title { font-weight: 800; letter-spacing: 0.02em; color: #cf3616; }\n\
+         .navigation-sidebar { padding: 10px; border-radius: 20px; background: alpha(#fc3f1d, 0.05); border: 1px solid alpha(#fc3f1d, 0.18); box-shadow: inset 0 1px 0 alpha(#ffffff, 0.03); }\n\
+         .navigation-sidebar row { border-radius: 12px; margin: 2px 0; padding: 5px 8px; transition: 120ms ease-out; }\n\
+         .navigation-sidebar row:hover { background: alpha(#fc3f1d, 0.07); }\n\
+         .navigation-sidebar row:selected { background: #cf3616; box-shadow: inset 0 0 0 1px alpha(#ffb25c, 0.42); }\n\
+         .navigation-sidebar row:selected label { color: white; font-weight: 700; }\n\
          .content-stack { min-width: 740px; }\n\
          .overview-strip { padding-top: 8px; padding-bottom: 4px; }\n\
-         .overview-tile { padding: 10px 13px; border-radius: 14px; background: linear-gradient(180deg, alpha(#ffcc00, 0.03), alpha(@window_bg_color, 0.50)); border: 1px solid alpha(#fc3f1d, 0.12); }\n\
+         .overview-tile { padding: 10px 13px; border-radius: 15px; background: alpha(@window_fg_color, 0.035); border: 1px solid alpha(#fc3f1d, 0.14); box-shadow: inset 0 1px 0 alpha(#ffffff, 0.03); }\n\
          .overview-title { opacity: 0.90; font-weight: 700; }\n\
          .page-root { padding: 18px; }\n\
+         .page-hero { margin-bottom: 2px; padding: 6px 0 2px 0; }\n\
          .page-heading { margin-bottom: 4px; }\n\
-         .section-card { padding: 20px; border-radius: 18px; background: linear-gradient(180deg, alpha(#ffffff, 0.02), alpha(@window_bg_color, 0.62)); border: 1px solid alpha(#fc3f1d, 0.10); }\n\
-         .section-muted { background: linear-gradient(180deg, alpha(#ffcc00, 0.02), alpha(@window_fg_color, 0.03)); border: 1px solid alpha(#fc3f1d, 0.08); }\n\
+         .section-card { padding: 20px; border-radius: 18px; background: alpha(@window_fg_color, 0.03); border: 1px solid alpha(@window_fg_color, 0.08); box-shadow: inset 0 1px 0 alpha(#ffffff, 0.03); }\n\
+         .brand-card { background: alpha(#fc3f1d, 0.07); border: 1px solid alpha(#fc3f1d, 0.24); box-shadow: inset 4px 0 0 #cf3616, inset 0 1px 0 alpha(#ffffff, 0.03); }\n\
+         .section-card .title-3 { color: alpha(@window_fg_color, 0.98); }\n\
+         .section-muted { background: alpha(#ffb25c, 0.06); border: 1px solid alpha(#ff8f3f, 0.16); }\n\
+         .section-muted .title-3 { color: alpha(@window_fg_color, 0.96); }\n\
+         .note-card { border-left: 3px solid alpha(#ff8f3f, 0.60); }\n\
          .body-copy { color: alpha(@window_fg_color, 0.94); }\n\
          .note-text { color: alpha(@window_fg_color, 0.72); }\n\
          .action-row > button { min-height: 34px; border-radius: 10px; padding: 0 12px; }\n\
-         .action-row > button.suggested-action { background-image: linear-gradient(90deg, #fc3f1d, #ff8f3f); color: white; }\n\
+         .action-row > button.suggested-action { background: #cf3616; color: white; box-shadow: inset 0 1px 0 alpha(#ffffff, 0.14); }\n\
+         .action-row > button:not(.suggested-action):not(.destructive-action) { border-color: alpha(#fc3f1d, 0.24); }\n\
+         .action-row > button.destructive-action { box-shadow: inset 0 1px 0 alpha(#ffffff, 0.08); }\n\
          .pill { border-radius: 999px; padding: 4px 10px; font-weight: 600; }\n\
-         .status-ready { background: alpha(@success_bg_color, 0.35); color: @success_fg_color; }\n\
-         .status-needs { background: alpha(@warning_bg_color, 0.35); color: @warning_fg_color; }\n\
-         .status-error { background: alpha(@error_bg_color, 0.35); color: @error_fg_color; }\n\
+         .status-ready { background: alpha(@success_bg_color, 0.32); color: @success_fg_color; }\n\
+         .status-needs { background: alpha(#ffb25c, 0.20); color: @warning_fg_color; }\n\
+         .status-error { background: alpha(@error_bg_color, 0.30); color: @error_fg_color; }\n\
          .status-unknown { background: alpha(@window_fg_color, 0.12); color: alpha(@window_fg_color, 0.88); }\n\
-         .accent { color: #ff8f3f; }\n",
+         .accent { color: #cf3616; }\n",
     );
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
