@@ -124,6 +124,7 @@ struct Widgets {
 
 pub fn run(start_tab: Option<String>) -> Result<()> {
     libadwaita::init()?;
+    gtk4::Window::set_default_icon_name(APP_ID_GTK);
     install_css();
     apply_color_scheme_override_from_env();
 

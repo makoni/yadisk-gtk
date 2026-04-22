@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>me.spaceinbox.yadisk.Gtk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Yandex Disk</name>
+  <summary>Native GNOME client for Yandex Disk</summary>
+  <developer id="me.spaceinbox">
+    <name>yadisk-gtk contributors</name>
+  </developer>
+  <update_contact>https://github.com/makoni/yadisk-gtk/issues</update_contact>
+  <launchable type="desktop-id">me.spaceinbox.yadisk.Gtk.desktop</launchable>
+  <provides>
+    <binary>yadisk-ui</binary>
+  </provides>
+  <url type="homepage">https://github.com/makoni/yadisk-gtk</url>
+  <url type="bugtracker">https://github.com/makoni/yadisk-gtk/issues</url>
+  <url type="vcs-browser">https://github.com/makoni/yadisk-gtk</url>
+  <description>
+    <p>
+      Yandex Disk is a native GNOME client for browsing and synchronizing files with Yandex Disk.
+      It includes a GTK/libadwaita control application, a background sync daemon, and optional host
+      integration components such as a Nautilus extension and a FUSE helper.
+    </p>
+    <p>
+      The GTK application handles account setup, daemon control, diagnostics, and integration status.
+      Full desktop integration may require companion host packages outside sandboxed distributions.
+    </p>
+  </description>
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+    <category>Utility</category>
+    <category>GTK</category>
+    <category>GNOME</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-03-24"/>
+  </releases>
+</component>

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Yandex Disk
+Comment=Native GNOME client for Yandex Disk
+Exec=yadisk-ui
+TryExec=yadisk-ui
+Icon=me.spaceinbox.yadisk.Gtk
+Terminal=false
+StartupNotify=true
+StartupWMClass=me.spaceinbox.yadisk.Gtk
+Categories=Network;GTK;GNOME;
+Keywords=Yandex;Disk;Cloud;Storage;Sync;Files;GNOME;
